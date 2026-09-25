@@ -91,12 +91,42 @@ def get_status(expiry, qty):
 # 3. 手機版分頁介面
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📦 庫存", "📸 拍照AI", "🛒 採買", "📜 取出紀錄", "📊 報表"])
 
-# --- 標籤一：食材庫存與取用管理 ---
+# --- 標籤一：食材庫存與完整 CRUD 管理 ---
 with tab1:
-    st.subheader("🍽️ 快速取用與庫存管理")
+    st.subheader("📦 冰箱庫存與管理")
     
-    # ⚡ 【新增】快速取用專區（免點開選單，直接在上方快速扣除庫存）
-    with st.expander("⚡ 快速取用消耗食材", expanded=True):
+    # 【新增功能 1】手動新增食材表單
+    with st.expander("➕ 手動新增食材到庫存"):
+        with st.form("manual_add_form"):
+            m_name = st.text_input("食材名稱*")
+            m_cat = st.selectbox("分類", CATEGORIES)
+            m_qty = st.number_input("數量", min_value=0.1, value=1.0, step=0.1)
+            m_unit = st.text_input("單位", value="個")
+            m_loc = st.selectbox("位置", LOCATIONS)
+            m_expiry = st.date_input("有效期限", value=date.today() + timedelta(days=7))
+            m_note = st.text_input("備註")
+            m_submitted = st.form_submit_button("確認新增")
+            
+            if m_submitted:
+                if not m_name.strip():
+                    st.warning("請輸入食材名稱！")
+                else:
+                    con = get_db()
+                    cur = con.cursor()
+                    cur.execute("""INSERT INTO foods 
+                        (name, category, quantity, unit, location, purchase_date, expiry_date, note)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (m_name, m_cat, m_qty, m_unit, m_loc, date.today().isoformat(), m_expiry.isoformat(), m_note))
+                    fid = cur.lastrowid
+                    cur.execute("INSERT INTO transactions(food_id, action, quantity, trans_date, note) VALUES(?,?,?,?,?)",
+                                (fid, "入庫", m_qty, date.today().isoformat(), "手動新增入庫"))
+                    con.commit()
+                    con.close()
+                    st.success(f"成功新增 {m_name}！")
+                    st.rerun()
+
+    # 快速取用專區
+    with st.expander("⚡ 快速取用消耗食材"):
         con_quick = get_db()
         cur_q = con_quick.cursor()
         cur_q.execute("SELECT id, name, quantity, unit FROM foods WHERE quantity > 0 ORDER BY name")
@@ -153,7 +183,7 @@ with tab1:
                 st.write(f"**分類**: {cat or '未分類'} | **位置**: {loc or '未指定'}")
                 st.write(f"**有效期限**: {expiry or '未設定'}")
                 
-                # 單一品項的詳細取用表單
+                # 取用消耗表單
                 with st.form(key=f"consume_form_{fid}"):
                     st.markdown("##### 🍽️ 單品取用/消耗")
                     consume_qty = st.number_input("輸入取用數量", min_value=0.1, max_value=float(qty) if qty > 0 else 1.0, value=1.0, step=0.1, key=f"c_qty_{fid}")
@@ -173,6 +203,29 @@ with tab1:
                             st.success(f"成功從冰箱取出 {name} 共 {consume_qty:g} {unit or ''}！")
                             st.rerun()
 
+                # 【新增功能 2】修改食材資料表單
+                with st.form(key=f"edit_form_{fid}"):
+                    st.markdown("##### ✏️ 修改食材資料")
+                    e_name = st.text_input("食材名稱", value=name, key=f"e_name_{fid}")
+                    e_cat = st.selectbox("分類", CATEGORIES, index=CATEGORIES.index(cat) if cat in CATEGORIES else 0, key=f"e_cat_{fid}")
+                    e_qty = st.number_input("數量", min_value=0.0, value=float(qty), step=0.1, key=f"e_qty_{fid}")
+                    e_unit = st.text_input("單位", value=unit if unit else "", key=f"e_unit_{fid}")
+                    e_loc = st.selectbox("位置", LOCATIONS, index=LOCATIONS.index(loc) if loc in LOCATIONS else 0, key=f"e_loc_{fid}")
+                    
+                    default_expiry = parse_date(expiry) if expiry else date.today()
+                    if not default_expiry: default_expiry = date.today()
+                    e_expiry = st.date_input("有效期限", value=default_expiry, key=f"e_exp_{fid}")
+                    
+                    e_submitted = st.form_submit_button("儲存修改")
+                    if e_submitted:
+                        con = get_db()
+                        con.execute("""UPDATE foods SET name=?, category=?, quantity=?, unit=?, location=?, expiry_date=? WHERE id=?""",
+                                    (e_name, e_cat, e_qty, e_unit, e_loc, e_expiry.isoformat(), fid))
+                        con.commit()
+                        con.close()
+                        st.success(f"已成功更新 {e_name} 的資料！")
+                        st.rerun()
+
                 col_a, col_b = st.columns(2)
                 with col_a:
                     if st.button("加到採買", key=f"shop_{fid}"):
@@ -183,6 +236,7 @@ with tab1:
                         st.success(f"已將 {name} 加入採買清單")
                         st.rerun()
                 with col_b:
+                    # 【新增功能 3】刪除食物
                     if st.button("刪除品項", key=f"del_{fid}", type="primary"):
                         con = get_db()
                         con.execute("DELETE FROM foods WHERE id = ?", (fid,))
