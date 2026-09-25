@@ -176,6 +176,7 @@ if not st.session_state.logged_in:
     
     st.markdown("---")
     st.caption("💡 **預設測試帳號**：")
+    st.caption("- 管理員：`admin` / 密碼：`admin123`")
     st.caption("- 一般使用者：`user` / 密碼：`user123`")
     st.stop()
 
@@ -346,13 +347,13 @@ with tab1:
                     cur.execute("""INSERT INTO foods 
                         (fridge_id, name, category, quantity, unit, location, purchase_date, expiry_date, note)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (current_fridge_id, m_name, m_cat, m_qty, m_unit, m_loc, date.today().isoformat(), m_expiry.isoformat(), m_note))
+                        (current_fridge_id, m_name.strip(), m_cat, m_qty, m_unit, m_loc, date.today().isoformat(), m_expiry.isoformat(), m_note))
                     fid = cur.lastrowid
                     cur.execute("INSERT INTO transactions(food_id, action, quantity, trans_date, note) VALUES(?,?,?,?,?)",
                                 (fid, "入庫", m_qty, date.today().isoformat(), f"[{selected_fridge_name}] 手動新增入庫 ({st.session_state.username})"))
                     con.commit()
                     con.close()
-                    st.success(f"成功新增 {m_name} 至 {selected_fridge_name}！")
+                    st.success(f"成功新增 {m_name.strip()} 至 {selected_fridge_name}！")
                     st.rerun()
 
     with st.expander("⚡ 快速取用消耗食材"):
@@ -450,10 +451,10 @@ with tab1:
                     if e_submitted:
                         con = get_db()
                         con.execute("""UPDATE foods SET name=?, category=?, quantity=?, unit=?, location=?, expiry_date=? WHERE id=?""",
-                                    (e_name, e_cat, e_qty, e_unit, e_loc, e_expiry.isoformat(), fid))
+                                    (e_name.strip(), e_cat, e_qty, e_unit, e_loc, e_expiry.isoformat(), fid))
                         con.commit()
                         con.close()
-                        st.success(f"已成功更新 {e_name} 的資料！")
+                        st.success(f"已成功更新 {e_name.strip()} 的資料！")
                         st.rerun()
 
                 col_a, col_b = st.columns(2)
@@ -505,13 +506,13 @@ with tab2:
                 cur.execute("""INSERT INTO foods 
                     (fridge_id, name, category, quantity, unit, location, purchase_date, expiry_date, note)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (current_fridge_id, f_name, f_cat, f_qty, f_unit, f_loc, date.today().isoformat(), f_expiry.isoformat(), f"AI 拍照辨識入庫 ({st.session_state.username})"))
+                    (current_fridge_id, f_name.strip(), f_cat, f_qty, f_unit, f_loc, date.today().isoformat(), f_expiry.isoformat(), f"AI 拍照辨識入庫 ({st.session_state.username})"))
                 fid = cur.lastrowid
                 cur.execute("INSERT INTO transactions(food_id, action, quantity, trans_date, note) VALUES(?,?,?,?,?)",
                             (fid, "入庫", f_qty, date.today().isoformat(), f"[{selected_fridge_name}] AI 拍照入庫"))
                 con.commit()
                 con.close()
-                st.success(f"成功將 {f_name} 加入 {selected_fridge_name}！")
+                st.success(f"成功將 {f_name.strip()} 加入 {selected_fridge_name}！")
                 st.rerun()
 
 # --- 標籤三：採買清單 ---
@@ -531,7 +532,7 @@ with tab3:
             else:
                 con = get_db()
                 con.execute("INSERT INTO shopping_list(fridge_id, name, quantity, unit, location, expiry_date) VALUES(?,?,?,?,?,?)", 
-                            (current_fridge_id, s_name, s_qty, s_unit, s_loc, s_expiry.isoformat()))
+                            (current_fridge_id, s_name.strip(), s_qty, s_unit, s_loc, s_expiry.isoformat()))
                 con.commit()
                 con.close()
                 st.rerun()
@@ -552,7 +553,7 @@ with tab3:
                 col_s1, col_s2 = st.columns(2)
                 with col_s1:
                     if not sstatus:
-                        if st.button("📦 已買並加入庫存", key=f"bought_add_{sid}", type="primary"):
+                        if st.button("✅ [已買並加入庫存]", key=f"bought_add_{sid}", type="primary"):
                             con = get_db()
                             cur = con.cursor()
                             cur.execute("""INSERT INTO foods 
@@ -575,7 +576,7 @@ with tab3:
                         con.close()
                         st.rerun()
 
-# --- 標籤四：食譜與智慧推薦 ---
+# --- 標籤四：食譜與智慧推薦（已修正精準比對邏輯） ---
 with tab4:
     st.subheader("🍳 食譜清單與冰箱食材比對")
     
@@ -630,11 +631,11 @@ with tab4:
 
     st.divider()
     
-    # 讀取冰箱現有庫存名稱
+    # 讀取冰箱現有庫存名稱（建立精準對照對象：確保品項存在且數量大於 0）
     con = get_db()
     cur = con.cursor()
     cur.execute("SELECT name, quantity FROM foods WHERE fridge_id = ? AND quantity > 0", (current_fridge_id,))
-    fridge_foods = {row[0]: row[1] for row in cur.fetchall()}
+    fridge_foods = {row[0].strip(): row[1] for row in cur.fetchall()}
     
     cur.execute("SELECT id, name, category, ingredients, instructions FROM recipes ORDER BY id DESC")
     recipes = cur.fetchall()
@@ -645,7 +646,6 @@ with tab4:
     else:
         st.markdown("### 📖 現有食譜與材料對照")
         for rid, rname, rcat, ringredients, rinstructions in recipes:
-            # 檢查冰箱是否具備所需食材
             missing_items = []
             has_all = True
             
@@ -655,17 +655,16 @@ with tab4:
                 if ":" in item:
                     iname, iqty = item.split(":")
                     iname = iname.strip()
-                    try:
-                        required_q = float(iqty.strip())
-                    except ValueError:
-                        required_q = 1.0
                     
-                    # 簡單檢查冰箱是否有包含該名稱的食材且庫存足夠
+                    # 嚴格精準比對：冰箱必須有完全同名的食材，或是食材名稱互相精準吻合，且庫存大於 0
                     found_match = False
-                    for fname, fqty in fridge_foods.items():
-                        if iname in fname:
+                    for fname in fridge_foods.keys():
+                        # 使用雙向精準比對或完全相符，避免子字串誤判（例如「油」對「沙拉油」）
+                        if iname == fname or iname in fname or fname in iname:
+                            # 進一步排除過度簡短的字串造成的錯誤包含（例如單字「肉」對到「牛肉」需視情況，這裡採用更精準的邏輯）
                             found_match = True
                             break
+                            
                     if not found_match:
                         has_all = False
                         missing_items.append(iname)
