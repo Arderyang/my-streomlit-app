@@ -156,7 +156,6 @@ if not st.session_state.logged_in:
             else:
                 st.error("帳號或密碼錯誤，請重新輸入！")
     
-    # 預設帳號提示
     st.markdown("---")
     st.caption("💡 **預設測試帳號**：")
     st.caption("- 管理員：`admin` / 密碼：`admin123`")
@@ -166,7 +165,6 @@ if not st.session_state.logged_in:
 # --- 已登入後的介面 ---
 st.title("🧊 智慧冰箱 V2 (手機版)")
 
-# 頂部顯示目前登入狀態與登出按鈕
 col_top1, col_top2 = st.columns([3, 1])
 with col_top1:
     role_display = "👑 管理者" if st.session_state.role == "admin" else "👤 一般使用者"
@@ -209,9 +207,41 @@ fridge_options = {name: fid for fid, name in fridges_list}
 selected_fridge_name = st.selectbox("📍 選擇目前操作的冰箱", options=list(fridge_options.keys()))
 current_fridge_id = fridge_options[selected_fridge_name]
 
-# 管理冰箱的選單（僅限管理者 admin）
+# 管理者專屬設定專區
 if st.session_state.role == "admin":
-    with st.expander("⚙️ 管理冰箱清單 (僅限管理者)"):
+    with st.expander("⚙️ 系統帳號與權限管理 (僅限管理者)"):
+        st.markdown("#### ➕ 新增系統成員")
+        with st.form("add_user_form"):
+            new_u_name = st.text_input("新使用者帳號")
+            new_u_pass = st.text_input("新使用者密碼", type="password")
+            new_u_role = st.selectbox("權限角色", options=["user", "admin"], format_func=lambda x: "一般使用者 (user)" if x=="user" else "管理者 (admin)")
+            submit_new_user = st.form_submit_button("建立新帳號")
+            
+            if submit_new_user:
+                if not new_u_name.strip() or not new_u_pass.strip():
+                    st.warning("帳號與密碼皆不可為空白！")
+                else:
+                    try:
+                        con = get_db()
+                        con.execute("INSERT INTO users(username, password, role) VALUES(?, ?, ?)",
+                                    (new_u_name.strip(), hash_password(new_u_pass.strip()), new_u_role))
+                        con.commit()
+                        con.close()
+                        st.success(f"成功新增成員：{new_u_name.strip()} ({'管理者' if new_u_role=='admin' else '一般使用者'})")
+                        st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.error("該帳號名稱已存在，請使用其他帳號名稱！")
+        
+        st.markdown("#### 👥 現有成員列表")
+        con_u = get_db()
+        all_users = con_u.execute("SELECT id, username, role, created_at FROM users ORDER BY id").fetchall()
+        con_u.close()
+        for uid, uname, urole, udate in all_users:
+            r_str = "👑 管理者" if urole == "admin" else "👤 一般使用者"
+            st.text(f"ID: {uid} | 帳號: {uname} | 權限: {r_str}")
+
+        st.divider()
+        st.markdown("#### 🧊 冰箱清單管理")
         new_fridge_name = st.text_input("新冰箱名稱")
         if st.button("➕ 建立新冰箱"):
             if new_fridge_name.strip():
@@ -392,7 +422,6 @@ with tab1:
                         st.success(f"已將 {name} 加入 {selected_fridge_name} 的採買清單")
                         st.rerun()
                 with col_b:
-                    # 刪除品項：權限檢查（僅限管理員或皆可？這裡設定為管理者或允許一般人刪除，視需求而定，此處保留讓管理者專用或皆可，示範中嚴格限制刪除需為 admin，或者只要登入即可）
                     if st.session_state.role == "admin":
                         if st.button("刪除品項", key=f"del_{fid}", type="primary"):
                             con = get_db()
