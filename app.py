@@ -6,7 +6,7 @@ DB_FILE = "smart_fridge.db"
 CATEGORIES = ["肉類", "蔬菜", "水果", "乳製品", "蛋類", "海鮮", "飲料", "調味料", "冷凍食品", "其他"]
 LOCATIONS = ["冷藏", "冷凍", "蔬果室", "其他"]
 
-# 1. 初始化資料庫
+# 1. 初始化資料庫（自動升級 shopping_list 結構）
 def init_db():
     con = sqlite3.connect(DB_FILE, check_same_thread=False)
     cur = con.cursor()
@@ -37,9 +37,20 @@ def init_db():
         name TEXT NOT NULL,
         quantity REAL DEFAULT 1,
         unit TEXT,
+        location TEXT,
+        expiry_date TEXT,
         status INTEGER DEFAULT 0,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
+    
+    # 檢查舊版 shopping_list 是否缺少欄位，若缺少則自動補上（相容舊資料庫）
+    cur.execute("PRAGMA table_info(shopping_list)")
+    columns = [col[1] for col in cur.fetchall()]
+    if "location" not in columns:
+        cur.execute("ALTER TABLE shopping_list ADD COLUMN location TEXT")
+    if "expiry_date" not in columns:
+        cur.execute("ALTER TABLE shopping_list ADD COLUMN expiry_date TEXT")
+
     con.commit()
     con.close()
 
@@ -184,7 +195,7 @@ with tab1:
                 st.write(f"**分類**: {cat or '未分類'} | **位置**: {loc or '未指定'}")
                 st.write(f"**有效期限**: {expiry or '未設定'}")
                 
-                # 取用消耗表單（防呆處理預設值）
+                # 取用消耗表單
                 with st.form(key=f"consume_form_{fid}"):
                     st.markdown("##### 🍽️ 單品取用/消耗")
                     max_c = float(qty) if qty > 0 else 0.1
@@ -233,7 +244,8 @@ with tab1:
                 with col_a:
                     if st.button("加到採買", key=f"shop_{fid}"):
                         con = get_db()
-                        con.execute("INSERT INTO shopping_list(name, quantity, unit) VALUES(?,?,?)", (name, 1, unit))
+                        con.execute("INSERT INTO shopping_list(name, quantity, unit, location, expiry_date) VALUES(?,?,?,?,?)", 
+                                    (name, 1, unit, loc, expiry))
                         con.commit()
                         con.close()
                         st.success(f"已將 {name} 加入採買清單")
@@ -283,50 +295,69 @@ with tab2:
                 st.success(f"成功將 {f_name} 加入智慧冰箱！")
                 st.rerun()
 
-# --- 標籤三：採買清單 ---
+# --- 標籤三：採買清單（新增預設存放位置與到期日） ---
 with tab3:
     st.subheader("🛒 採買清單")
     with st.form("add_shop_form", clear_on_submit=True):
-        s_name = st.text_input("想買什麼？")
-        s_qty = st.number_input("數量", min_value=1.0, value=1.0)
+        s_name = st.text_input("想買什麼？*")
+        s_qty = st.number_input("數量", min_value=0.1, value=1.0, step=0.1)
         s_unit = st.text_input("單位", value="個")
+        s_loc = st.selectbox("預計存放位置", LOCATIONS)
+        s_expiry = st.date_input("預計有效期限", value=date.today() + timedelta(days=7))
         s_submit = st.form_submit_button("新增至採買")
-        if s_submit and s_name:
-            con = get_db()
-            con.execute("INSERT INTO shopping_list(name, quantity, unit) VALUES(?,?,?)", (s_name, s_qty, s_unit))
-            con.commit()
-            con.close()
-            st.rerun()
+        
+        if s_submit:
+            if not s_name.strip():
+                st.warning("請輸入想買的食材名稱！")
+            else:
+                con = get_db()
+                con.execute("INSERT INTO shopping_list(name, quantity, unit, location, expiry_date) VALUES(?,?,?,?,?)", 
+                            (s_name, s_qty, s_unit, s_loc, s_expiry.isoformat()))
+                con.commit()
+                con.close()
+                st.rerun()
 
     con = get_db()
     cur = con.cursor()
-    cur.execute("SELECT id, name, quantity, unit, status FROM shopping_list ORDER BY status, id DESC")
+    cur.execute("SELECT id, name, quantity, unit, location, expiry_date, status FROM shopping_list ORDER BY status, id DESC")
     shop_rows = cur.fetchall()
     con.close()
 
     if not shop_rows:
         st.info("目前採買清單空空如也。")
     else:
-        for sid, sname, sqty, sunit, sstatus in shop_rows:
-            col_s1, col_s2, col_s3 = st.columns([3, 1, 1])
-            with col_s1:
-                label = f"~~{sname} ({sqty:g}{sunit or ''})~~" if sstatus else f"**{sname}** ({sqty:g}{sunit or ''})"
-                st.markdown(label)
-            with col_s2:
-                if not sstatus:
-                    if st.button("已買", key=f"bought_{sid}"):
+        for sid, sname, sqty, sunit, sloc, sexp, sstatus in shop_rows:
+            with st.expander(f"{'✅ [已買]' if sstatus else '🛒 [待買]'} {sname} ({sqty:g}{sunit or ''})"):
+                st.write(f"**預計位置**: {sloc or '未指定'} | **預計到期**: {sexp or '未設定'}")
+                
+                col_s1, col_s2 = st.columns(2)
+                with col_s1:
+                    if not sstatus:
+                        if st.button("📦 已買並加入庫存", key=f"bought_add_{sid}", type="primary"):
+                            con = get_db()
+                            cur = con.cursor()
+                            # 1. 寫入冰箱庫存
+                            cur.execute("""INSERT INTO foods 
+                                (name, category, quantity, unit, location, purchase_date, expiry_date, note)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                                (sname, "其他", sqty, sunit, sloc or "冷藏", date.today().isoformat(), sexp or date.today().isoformat(), "從採買清單入庫"))
+                            fid = cur.lastrowid
+                            # 2. 寫入異動紀錄
+                            cur.execute("INSERT INTO transactions(food_id, action, quantity, trans_date, note) VALUES(?,?,?,?,?)",
+                                        (fid, "入庫", sqty, date.today().isoformat(), "採買清單轉入"))
+                            # 3. 更新採買清單狀態為已買
+                            cur.execute("UPDATE shopping_list SET status=1 WHERE id=?", (sid,))
+                            con.commit()
+                            con.close()
+                            st.success(f"成功將 {sname} 加入冰箱庫存！")
+                            st.rerun()
+                with col_s2:
+                    if st.button("🗑️ 刪除項目", key=f"del_shop_{sid}"):
                         con = get_db()
-                        con.execute("UPDATE shopping_list SET status=1 WHERE id=?", (sid,))
+                        con.execute("DELETE FROM shopping_list WHERE id=?", (sid,))
                         con.commit()
                         con.close()
                         st.rerun()
-            with col_s3:
-                if st.button("刪除", key=f"del_shop_{sid}"):
-                    con = get_db()
-                    con.execute("DELETE FROM shopping_list WHERE id=?", (sid,))
-                    con.commit()
-                    con.close()
-                    st.rerun()
 
 # --- 標籤四：取出/異動紀錄 ---
 with tab4:
