@@ -6,12 +6,26 @@ DB_FILE = "smart_fridge.db"
 CATEGORIES = ["肉類", "蔬菜", "水果", "乳製品", "蛋類", "海鮮", "飲料", "調味料", "冷凍食品", "其他"]
 LOCATIONS = ["冷藏", "冷凍", "蔬果室", "其他"]
 
-# 1. 初始化資料庫（自動升級 shopping_list 結構）
+# 1. 初始化資料庫（新增 fridges 資料表，並為 foods 與 shopping_list 增加 fridge_id）
 def init_db():
     con = sqlite3.connect(DB_FILE, check_same_thread=False)
     cur = con.cursor()
+    
+    # 冰箱主表
+    cur.execute("""CREATE TABLE IF NOT EXISTS fridges(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    
+    # 預設至少有一台主冰箱
+    cur.execute("SELECT COUNT(*) FROM fridges")
+    if cur.fetchone()[0] == 0:
+        cur.execute("INSERT INTO fridges(name) VALUES('主冰箱')")
+
     cur.execute("""CREATE TABLE IF NOT EXISTS foods(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        fridge_id INTEGER DEFAULT 1,
         barcode TEXT,
         name TEXT NOT NULL,
         category TEXT,
@@ -24,6 +38,7 @@ def init_db():
         note TEXT,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
+    
     cur.execute("""CREATE TABLE IF NOT EXISTS transactions(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         food_id INTEGER,
@@ -32,8 +47,10 @@ def init_db():
         trans_date TEXT,
         note TEXT
     )""")
+    
     cur.execute("""CREATE TABLE IF NOT EXISTS shopping_list(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        fridge_id INTEGER DEFAULT 1,
         name TEXT NOT NULL,
         quantity REAL DEFAULT 1,
         unit TEXT,
@@ -43,12 +60,19 @@ def init_db():
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
     
-    # 檢查舊版 shopping_list 是否缺少欄位，若缺少則自動補上（相容舊資料庫）
+    # 檢查並補上可能缺少的欄位（相容舊資料庫）
+    cur.execute("PRAGMA table_info(foods)")
+    f_cols = [col[1] for col in cur.fetchall()]
+    if "fridge_id" not in f_cols:
+        cur.execute("ALTER TABLE foods ADD COLUMN fridge_id INTEGER DEFAULT 1")
+
     cur.execute("PRAGMA table_info(shopping_list)")
-    columns = [col[1] for col in cur.fetchall()]
-    if "location" not in columns:
+    s_cols = [col[1] for col in cur.fetchall()]
+    if "fridge_id" not in s_cols:
+        cur.execute("ALTER TABLE shopping_list ADD COLUMN fridge_id INTEGER DEFAULT 1")
+    if "location" not in s_cols:
         cur.execute("ALTER TABLE shopping_list ADD COLUMN location TEXT")
-    if "expiry_date" not in columns:
+    if "expiry_date" not in s_cols:
         cur.execute("ALTER TABLE shopping_list ADD COLUMN expiry_date TEXT")
 
     con.commit()
@@ -99,14 +123,56 @@ def get_status(expiry, qty):
     if days <= 7: return f"🟡 {days}天內到期"
     return "正常"
 
+# --- 全局冰箱選擇列 ---
+con_f = get_db()
+fridges_list = con_f.execute("SELECT id, name FROM fridges ORDER BY id").fetchall()
+con_f.close()
+
+fridge_options = {name: fid for fid, name in fridges_list}
+selected_fridge_name = st.selectbox("📍 選擇目前操作的冰箱", options=list(fridge_options.keys()))
+current_fridge_id = fridge_options[selected_fridge_name]
+
+# 管理冰箱的選單
+with st.expander("⚙️ 管理冰箱清單 (新增/刪除冰箱)"):
+    new_fridge_name = st.text_input("新冰箱名稱")
+    if st.button("➕ 建立新冰箱"):
+        if new_fridge_name.strip():
+            try:
+                con = get_db()
+                con.execute("INSERT INTO fridges(name) VALUES(?)", (new_fridge_name.strip(),))
+                con.commit()
+                con.close()
+                st.success(f"成功新增冰箱：{new_fridge_name}")
+                st.rerun()
+            except sqlite3.IntegrityError:
+                st.error("該冰箱名稱已存在！")
+        else:
+            st.warning("請輸入冰箱名稱！")
+            
+    if len(fridges_list) > 1:
+        del_target = st.selectbox("選擇要刪除的冰箱", options=list(fridge_options.keys()), key="del_fridge_sel")
+        if st.button("🗑️ 刪除此冰箱及其所有庫存", type="primary"):
+            target_id = fridge_options[del_target]
+            con = get_db()
+            con.execute("DELETE FROM foods WHERE fridge_id = ?", (target_id,))
+            con.execute("DELETE FROM shopping_list WHERE fridge_id = ?", (target_id,))
+            con.execute("DELETE FROM fridges WHERE id = ?", (target_id,))
+            con.commit()
+            con.close()
+            st.success(f"已刪除冰箱：{del_target}")
+            st.rerun()
+    else:
+        st.info("系統中至少需保留一台冰箱，無法刪除。")
+
+st.divider()
+
 # 3. 手機版分頁介面
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📦 庫存", "📸 拍照AI", "🛒 採買", "📜 取出紀錄", "📊 報表"])
 
 # --- 標籤一：食材庫存與完整 CRUD 管理 ---
 with tab1:
-    st.subheader("📦 冰箱庫存與管理")
+    st.subheader(f"📦 [{selected_fridge_name}] 冰箱庫存與管理")
     
-    # 手動新增食材表單
     with st.expander("➕ 手動新增食材到庫存"):
         with st.form("manual_add_form"):
             m_name = st.text_input("食材名稱*")
@@ -125,27 +191,26 @@ with tab1:
                     con = get_db()
                     cur = con.cursor()
                     cur.execute("""INSERT INTO foods 
-                        (name, category, quantity, unit, location, purchase_date, expiry_date, note)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (m_name, m_cat, m_qty, m_unit, m_loc, date.today().isoformat(), m_expiry.isoformat(), m_note))
+                        (fridge_id, name, category, quantity, unit, location, purchase_date, expiry_date, note)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (current_fridge_id, m_name, m_cat, m_qty, m_unit, m_loc, date.today().isoformat(), m_expiry.isoformat(), m_note))
                     fid = cur.lastrowid
                     cur.execute("INSERT INTO transactions(food_id, action, quantity, trans_date, note) VALUES(?,?,?,?,?)",
-                                (fid, "入庫", m_qty, date.today().isoformat(), "手動新增入庫"))
+                                (fid, "入庫", m_qty, date.today().isoformat(), f"[{selected_fridge_name}] 手動新增入庫"))
                     con.commit()
                     con.close()
-                    st.success(f"成功新增 {m_name}！")
+                    st.success(f"成功新增 {m_name} 至 {selected_fridge_name}！")
                     st.rerun()
 
-    # 快速取用專區
     with st.expander("⚡ 快速取用消耗食材"):
         con_quick = get_db()
         cur_q = con_quick.cursor()
-        cur_q.execute("SELECT id, name, quantity, unit FROM foods WHERE quantity > 0 ORDER BY name")
+        cur_q.execute("SELECT id, name, quantity, unit FROM foods WHERE fridge_id = ? AND quantity > 0 ORDER BY name", (current_fridge_id,))
         active_foods = cur_q.fetchall()
         con_quick.close()
         
         if not active_foods:
-            st.info("目前沒有庫存大於 0 的食材可供取用。")
+            st.info(f"[{selected_fridge_name}] 目前沒有庫存大於 0 的食材可供取用。")
         else:
             food_options = {f"{item[1]} (現有: {item[2]:g} {item[3] or ''})": item for item in active_foods}
             selected_label = st.selectbox("選擇要取用的食材", options=list(food_options.keys()))
@@ -164,7 +229,7 @@ with tab1:
                         con = get_db()
                         con.execute("UPDATE foods SET quantity = ? WHERE id = ?", (new_qty, fid_q))
                         con.execute("INSERT INTO transactions(food_id, action, quantity, trans_date, note) VALUES(?,?,?,?,?)",
-                                    (fid_q, "取出/消耗", -q_consume_qty, date.today().isoformat(), "手機快速取用"))
+                                    (fid_q, "取出/消耗", -q_consume_qty, date.today().isoformat(), f"[{selected_fridge_name}] 快速取用"))
                         con.commit()
                         con.close()
                         st.success(f"成功取出 {fname_q} 共 {q_consume_qty:g} {funit_q or ''}！")
@@ -177,15 +242,15 @@ with tab1:
     cur = con.cursor()
     if search_query:
         cur.execute("""SELECT id, name, category, quantity, unit, location, expiry_date 
-                       FROM foods WHERE name LIKE ? OR category LIKE ? OR location LIKE ? ORDER BY expiry_date""", 
-                    (f"%{search_query}%", f"%{search_query}%", f"%{search_query}%"))
+                       FROM foods WHERE fridge_id = ? AND (name LIKE ? OR category LIKE ? OR location LIKE ?) ORDER BY expiry_date""", 
+                    (current_fridge_id, f"%{search_query}%", f"%{search_query}%", f"%{search_query}%"))
     else:
-        cur.execute("SELECT id, name, category, quantity, unit, location, expiry_date FROM foods ORDER BY expiry_date")
+        cur.execute("SELECT id, name, category, quantity, unit, location, expiry_date FROM foods WHERE fridge_id = ? ORDER BY expiry_date", (current_fridge_id,))
     rows = cur.fetchall()
     con.close()
 
     if not rows:
-        st.info("目前沒有找到任何食材記錄。")
+        st.info(f"[{selected_fridge_name}] 目前沒有找到任何食材記錄。")
     else:
         for row in rows:
             fid, name, cat, qty, unit, loc, expiry = row
@@ -195,7 +260,6 @@ with tab1:
                 st.write(f"**分類**: {cat or '未分類'} | **位置**: {loc or '未指定'}")
                 st.write(f"**有效期限**: {expiry or '未設定'}")
                 
-                # 取用消耗表單
                 with st.form(key=f"consume_form_{fid}"):
                     st.markdown("##### 🍽️ 單品取用/消耗")
                     max_c = float(qty) if qty > 0 else 0.1
@@ -211,13 +275,12 @@ with tab1:
                             con = get_db()
                             con.execute("UPDATE foods SET quantity = ? WHERE id = ?", (new_qty, fid))
                             con.execute("INSERT INTO transactions(food_id, action, quantity, trans_date, note) VALUES(?,?,?,?,?)",
-                                        (fid, "取出/消耗", -consume_qty, date.today().isoformat(), "手機手動取用"))
+                                        (fid, "取出/消耗", -consume_qty, date.today().isoformat(), f"[{selected_fridge_name}] 手動取用"))
                             con.commit()
                             con.close()
-                            st.success(f"成功從冰箱取出 {name} 共 {consume_qty:g} {unit or ''}！")
+                            st.success(f"成功取出 {name} 共 {consume_qty:g} {unit or ''}！")
                             st.rerun()
 
-                # 修改食材資料表單
                 with st.form(key=f"edit_form_{fid}"):
                     st.markdown("##### ✏️ 修改食材資料")
                     e_name = st.text_input("食材名稱", value=name, key=f"e_name_{fid}")
@@ -244,24 +307,24 @@ with tab1:
                 with col_a:
                     if st.button("加到採買", key=f"shop_{fid}"):
                         con = get_db()
-                        con.execute("INSERT INTO shopping_list(name, quantity, unit, location, expiry_date) VALUES(?,?,?,?,?)", 
-                                    (name, 1, unit, loc, expiry))
+                        con.execute("INSERT INTO shopping_list(fridge_id, name, quantity, unit, location, expiry_date) VALUES(?,?,?,?,?,?)", 
+                                    (current_fridge_id, name, 1, unit, loc, expiry))
                         con.commit()
                         con.close()
-                        st.success(f"已將 {name} 加入採買清單")
+                        st.success(f"已將 {name} 加入 {selected_fridge_name} 的採買清單")
                         st.rerun()
                 with col_b:
                     if st.button("刪除品項", key=f"del_{fid}", type="primary"):
                         con = get_db()
                         con.execute("DELETE FROM foods WHERE id = ?", (fid,))
-                        con.execute("DELETE FROM transactions WHERE food_id = ?", (fid,))
                         con.commit()
                         con.close()
+                        st.success("已刪除品項，歷史紀錄已保留。")
                         st.rerun()
 
 # --- 標籤二：手機拍照與 AI 辨識入庫 ---
 with tab2:
-    st.subheader("📸 拍照 AI 辨識食材")
+    st.subheader(f"📸 拍照 AI 辨識入庫 ({selected_fridge_name})")
     camera_image = st.camera_input("拍攝照片")
     
     if camera_image is not None:
@@ -284,20 +347,20 @@ with tab2:
                 con = get_db()
                 cur = con.cursor()
                 cur.execute("""INSERT INTO foods 
-                    (name, category, quantity, unit, location, purchase_date, expiry_date, note)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (f_name, f_cat, f_qty, f_unit, f_loc, date.today().isoformat(), f_expiry.isoformat(), "AI 拍照辨識入庫"))
+                    (fridge_id, name, category, quantity, unit, location, purchase_date, expiry_date, note)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (current_fridge_id, f_name, f_cat, f_qty, f_unit, f_loc, date.today().isoformat(), f_expiry.isoformat(), "AI 拍照辨識入庫"))
                 fid = cur.lastrowid
                 cur.execute("INSERT INTO transactions(food_id, action, quantity, trans_date, note) VALUES(?,?,?,?,?)",
-                            (fid, "入庫", f_qty, date.today().isoformat(), "AI 拍照入庫"))
+                            (fid, "入庫", f_qty, date.today().isoformat(), f"[{selected_fridge_name}] AI 拍照入庫"))
                 con.commit()
                 con.close()
-                st.success(f"成功將 {f_name} 加入智慧冰箱！")
+                st.success(f"成功將 {f_name} 加入 {selected_fridge_name}！")
                 st.rerun()
 
-# --- 標籤三：採買清單（新增預設存放位置與到期日） ---
+# --- 標籤三：採買清單 ---
 with tab3:
-    st.subheader("🛒 採買清單")
+    st.subheader(f"🛒 採買清單 ({selected_fridge_name})")
     with st.form("add_shop_form", clear_on_submit=True):
         s_name = st.text_input("想買什麼？*")
         s_qty = st.number_input("數量", min_value=0.1, value=1.0, step=0.1)
@@ -311,20 +374,20 @@ with tab3:
                 st.warning("請輸入想買的食材名稱！")
             else:
                 con = get_db()
-                con.execute("INSERT INTO shopping_list(name, quantity, unit, location, expiry_date) VALUES(?,?,?,?,?)", 
-                            (s_name, s_qty, s_unit, s_loc, s_expiry.isoformat()))
+                con.execute("INSERT INTO shopping_list(fridge_id, name, quantity, unit, location, expiry_date) VALUES(?,?,?,?,?,?)", 
+                            (current_fridge_id, s_name, s_qty, s_unit, s_loc, s_expiry.isoformat()))
                 con.commit()
                 con.close()
                 st.rerun()
 
     con = get_db()
     cur = con.cursor()
-    cur.execute("SELECT id, name, quantity, unit, location, expiry_date, status FROM shopping_list ORDER BY status, id DESC")
+    cur.execute("SELECT id, name, quantity, unit, location, expiry_date, status FROM shopping_list WHERE fridge_id = ? ORDER BY status, id DESC", (current_fridge_id,))
     shop_rows = cur.fetchall()
     con.close()
 
     if not shop_rows:
-        st.info("目前採買清單空空如也。")
+        st.info(f"[{selected_fridge_name}] 目前採買清單空空如也。")
     else:
         for sid, sname, sqty, sunit, sloc, sexp, sstatus in shop_rows:
             with st.expander(f"{'✅ [已買]' if sstatus else '🛒 [待買]'} {sname} ({sqty:g}{sunit or ''})"):
@@ -336,20 +399,17 @@ with tab3:
                         if st.button("📦 已買並加入庫存", key=f"bought_add_{sid}", type="primary"):
                             con = get_db()
                             cur = con.cursor()
-                            # 1. 寫入冰箱庫存
                             cur.execute("""INSERT INTO foods 
-                                (name, category, quantity, unit, location, purchase_date, expiry_date, note)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                                (sname, "其他", sqty, sunit, sloc or "冷藏", date.today().isoformat(), sexp or date.today().isoformat(), "從採買清單入庫"))
+                                (fridge_id, name, category, quantity, unit, location, purchase_date, expiry_date, note)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                (current_fridge_id, sname, "其他", sqty, sunit, sloc or "冷藏", date.today().isoformat(), sexp or date.today().isoformat(), "從採買清單入庫"))
                             fid = cur.lastrowid
-                            # 2. 寫入異動紀錄
                             cur.execute("INSERT INTO transactions(food_id, action, quantity, trans_date, note) VALUES(?,?,?,?,?)",
-                                        (fid, "入庫", sqty, date.today().isoformat(), "採買清單轉入"))
-                            # 3. 更新採買清單狀態為已買
+                                        (fid, "入庫", sqty, date.today().isoformat(), f"[{selected_fridge_name}] 採買清單轉入"))
                             cur.execute("UPDATE shopping_list SET status=1 WHERE id=?", (sid,))
                             con.commit()
                             con.close()
-                            st.success(f"成功將 {sname} 加入冰箱庫存！")
+                            st.success(f"成功將 {sname} 加入 {selected_fridge_name} 庫存！")
                             st.rerun()
                 with col_s2:
                     if st.button("🗑️ 刪除項目", key=f"del_shop_{sid}"):
@@ -361,20 +421,22 @@ with tab3:
 
 # --- 標籤四：取出/異動紀錄 ---
 with tab4:
-    st.subheader("📜 食材進出與取出紀錄")
+    st.subheader(f"📜 食材進出與取出紀錄 ({selected_fridge_name})")
     con = get_db()
     cur = con.cursor()
+    # 僅顯示屬於該冰箱內的食材交易紀錄
     cur.execute("""
         SELECT t.id, COALESCE(f.name, '(已刪除食材)'), t.action, t.quantity, t.trans_date, t.note
         FROM transactions t
-        LEFT JOIN foods f ON t.food_id = f.id
+        JOIN foods f ON t.food_id = f.id
+        WHERE f.fridge_id = ?
         ORDER BY t.id DESC
-    """)
+    """, (current_fridge_id,))
     trans_rows = cur.fetchall()
     con.close()
 
     if not trans_rows:
-        st.info("目前沒有任何異動紀錄。")
+        st.info(f"[{selected_fridge_name}] 目前沒有任何異動紀錄。")
     else:
         for tid, fname, action, tqty, tdate, tnote in trans_rows:
             st.markdown(f"**[{tdate}] {fname}**")
@@ -383,12 +445,12 @@ with tab4:
 
 # --- 標籤五：到期與統計報表 ---
 with tab5:
-    st.subheader("📊 冰箱狀態總覽")
+    st.subheader(f"📊 冰箱狀態總覽 ({selected_fridge_name})")
     con = get_db()
     cur = con.cursor()
-    cur.execute("SELECT COUNT(*), COALESCE(SUM(quantity),0) FROM foods")
+    cur.execute("SELECT COUNT(*), COALESCE(SUM(quantity),0) FROM foods WHERE fridge_id = ?", (current_fridge_id,))
     count, total = cur.fetchone()
-    cur.execute("SELECT name, quantity, unit, expiry_date FROM foods WHERE expiry_date<>'' AND expiry_date IS NOT NULL ORDER BY expiry_date")
+    cur.execute("SELECT name, quantity, unit, expiry_date FROM foods WHERE fridge_id = ? AND expiry_date<>'' AND expiry_date IS NOT NULL ORDER BY expiry_date", (current_fridge_id,))
     all_foods = cur.fetchall()
     con.close()
 
@@ -404,4 +466,4 @@ with tab5:
             st.warning(f"{st_val}：**{name}** ({qty:g}{unit or ''}) - 有效期至 {exp}")
             warning_found = True
     if not warning_found:
-        st.success("太棒了！目前沒有 7 天內到期或已過期的食材。")
+        st.success(f"太棒了！[{selected_fridge_name}] 目前沒有 7 天內到期或已過期的食材。")
