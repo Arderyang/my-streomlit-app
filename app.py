@@ -1,8 +1,3 @@
-Bash
-git add requirements.txt app.py
-git commit -m "新增 requirements.txt 以安裝 Google 官方 SDK"
-git push
-
 import streamlit as st
 import sqlite3
 from datetime import date, datetime, timedelta
