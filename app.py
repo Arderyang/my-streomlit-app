@@ -1,12 +1,16 @@
 import streamlit as st
 import sqlite3
 from datetime import date, datetime, timedelta
+import hashlib
 
 DB_FILE = "smart_fridge.db"
 CATEGORIES = ["肉類", "蔬菜", "水果", "乳製品", "蛋類", "海鮮", "飲料", "調味料", "冷凍食品", "其他"]
 LOCATIONS = ["冷藏", "冷凍", "蔬果室", "其他"]
 
-# 1. 初始化資料庫（新增 fridges 資料表，並為 foods 與 shopping_list 增加 fridge_id）
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+# 1. 初始化資料庫（新增 fridges, users 資料表）
 def init_db():
     con = sqlite3.connect(DB_FILE, check_same_thread=False)
     cur = con.cursor()
@@ -18,10 +22,27 @@ def init_db():
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
     
+    # 使用者權限表
+    cur.execute("""CREATE TABLE IF NOT EXISTS users(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL UNIQUE,
+        password TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'user',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    
     # 預設至少有一台主冰箱
     cur.execute("SELECT COUNT(*) FROM fridges")
     if cur.fetchone()[0] == 0:
         cur.execute("INSERT INTO fridges(name) VALUES('主冰箱')")
+
+    # 預設管理者與使用者帳號
+    cur.execute("SELECT COUNT(*) FROM users")
+    if cur.fetchone()[0] == 0:
+        cur.execute("INSERT INTO users(username, password, role) VALUES(?, ?, ?)", 
+                    ("admin", hash_password("admin123"), "admin"))
+        cur.execute("INSERT INTO users(username, password, role) VALUES(?, ?, ?)", 
+                    ("user", hash_password("user123"), "user"))
 
     cur.execute("""CREATE TABLE IF NOT EXISTS foods(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,7 +81,7 @@ def init_db():
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
     
-    # 檢查並補上可能缺少的欄位（相容舊資料庫）
+    # 檢查並補上可能缺少的欄位
     cur.execute("PRAGMA table_info(foods)")
     f_cols = [col[1] for col in cur.fetchall()]
     if "fridge_id" not in f_cols:
@@ -101,7 +122,63 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+# 初始化 Session State 登入狀態
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "username" not in st.session_state:
+    st.session_state.username = ""
+if "role" not in st.session_state:
+    st.session_state.role = ""
+
+# --- 登入畫面檢查 ---
+if not st.session_state.logged_in:
+    st.title("🔒 智慧冰箱 V2 - 系統登入")
+    st.info("請先登入以存取冰箱資料與執行操作。")
+    
+    with st.form("login_form"):
+        input_user = st.text_input("帳號")
+        input_pass = st.text_input("密碼", type="password")
+        submit_login = st.form_submit_button("登入系統")
+        
+        if submit_login:
+            con = get_db()
+            cur = con.cursor()
+            cur.execute("SELECT password, role FROM users WHERE username = ?", (input_user.strip(),))
+            res = cur.fetchone()
+            con.close()
+            
+            if res and res[0] == hash_password(input_pass):
+                st.session_state.logged_in = True
+                st.session_state.username = input_user.strip()
+                st.session_state.role = res[1]
+                st.success("登入成功！正在進入系統...")
+                st.rerun()
+            else:
+                st.error("帳號或密碼錯誤，請重新輸入！")
+    
+    # 預設帳號提示
+    st.markdown("---")
+    st.caption("💡 **預設測試帳號**：")
+    st.caption("- 管理員：`admin` / 密碼：`admin123`")
+    st.caption("- 一般使用者：`user` / 密碼：`user123`")
+    st.stop()
+
+# --- 已登入後的介面 ---
 st.title("🧊 智慧冰箱 V2 (手機版)")
+
+# 頂部顯示目前登入狀態與登出按鈕
+col_top1, col_top2 = st.columns([3, 1])
+with col_top1:
+    role_display = "👑 管理者" if st.session_state.role == "admin" else "👤 一般使用者"
+    st.markdown(f"歡迎回來，**{st.session_state.username}** ({role_display})")
+with col_top2:
+    if st.button("登出系統"):
+        st.session_state.logged_in = False
+        st.session_state.username = ""
+        st.session_state.role = ""
+        st.rerun()
+
+st.divider()
 
 def parse_date(value):
     if not value: return None
@@ -132,37 +209,38 @@ fridge_options = {name: fid for fid, name in fridges_list}
 selected_fridge_name = st.selectbox("📍 選擇目前操作的冰箱", options=list(fridge_options.keys()))
 current_fridge_id = fridge_options[selected_fridge_name]
 
-# 管理冰箱的選單
-with st.expander("⚙️ 管理冰箱清單 (新增/刪除冰箱)"):
-    new_fridge_name = st.text_input("新冰箱名稱")
-    if st.button("➕ 建立新冰箱"):
-        if new_fridge_name.strip():
-            try:
+# 管理冰箱的選單（僅限管理者 admin）
+if st.session_state.role == "admin":
+    with st.expander("⚙️ 管理冰箱清單 (僅限管理者)"):
+        new_fridge_name = st.text_input("新冰箱名稱")
+        if st.button("➕ 建立新冰箱"):
+            if new_fridge_name.strip():
+                try:
+                    con = get_db()
+                    con.execute("INSERT INTO fridges(name) VALUES(?)", (new_fridge_name.strip(),))
+                    con.commit()
+                    con.close()
+                    st.success(f"成功新增冰箱：{new_fridge_name}")
+                    st.rerun()
+                except sqlite3.IntegrityError:
+                    st.error("該冰箱名稱已存在！")
+            else:
+                st.warning("請輸入冰箱名稱！")
+                
+        if len(fridges_list) > 1:
+            del_target = st.selectbox("選擇要刪除的冰箱", options=list(fridge_options.keys()), key="del_fridge_sel")
+            if st.button("🗑️ 刪除此冰箱及其所有庫存", type="primary"):
+                target_id = fridge_options[del_target]
                 con = get_db()
-                con.execute("INSERT INTO fridges(name) VALUES(?)", (new_fridge_name.strip(),))
+                con.execute("DELETE FROM foods WHERE fridge_id = ?", (target_id,))
+                con.execute("DELETE FROM shopping_list WHERE fridge_id = ?", (target_id,))
+                con.execute("DELETE FROM fridges WHERE id = ?", (target_id,))
                 con.commit()
                 con.close()
-                st.success(f"成功新增冰箱：{new_fridge_name}")
+                st.success(f"已刪除冰箱：{del_target}")
                 st.rerun()
-            except sqlite3.IntegrityError:
-                st.error("該冰箱名稱已存在！")
         else:
-            st.warning("請輸入冰箱名稱！")
-            
-    if len(fridges_list) > 1:
-        del_target = st.selectbox("選擇要刪除的冰箱", options=list(fridge_options.keys()), key="del_fridge_sel")
-        if st.button("🗑️ 刪除此冰箱及其所有庫存", type="primary"):
-            target_id = fridge_options[del_target]
-            con = get_db()
-            con.execute("DELETE FROM foods WHERE fridge_id = ?", (target_id,))
-            con.execute("DELETE FROM shopping_list WHERE fridge_id = ?", (target_id,))
-            con.execute("DELETE FROM fridges WHERE id = ?", (target_id,))
-            con.commit()
-            con.close()
-            st.success(f"已刪除冰箱：{del_target}")
-            st.rerun()
-    else:
-        st.info("系統中至少需保留一台冰箱，無法刪除。")
+            st.info("系統中至少需保留一台冰箱，無法刪除。")
 
 st.divider()
 
@@ -196,7 +274,7 @@ with tab1:
                         (current_fridge_id, m_name, m_cat, m_qty, m_unit, m_loc, date.today().isoformat(), m_expiry.isoformat(), m_note))
                     fid = cur.lastrowid
                     cur.execute("INSERT INTO transactions(food_id, action, quantity, trans_date, note) VALUES(?,?,?,?,?)",
-                                (fid, "入庫", m_qty, date.today().isoformat(), f"[{selected_fridge_name}] 手動新增入庫"))
+                                (fid, "入庫", m_qty, date.today().isoformat(), f"[{selected_fridge_name}] 手動新增入庫 ({st.session_state.username})"))
                     con.commit()
                     con.close()
                     st.success(f"成功新增 {m_name} 至 {selected_fridge_name}！")
@@ -229,7 +307,7 @@ with tab1:
                         con = get_db()
                         con.execute("UPDATE foods SET quantity = ? WHERE id = ?", (new_qty, fid_q))
                         con.execute("INSERT INTO transactions(food_id, action, quantity, trans_date, note) VALUES(?,?,?,?,?)",
-                                    (fid_q, "取出/消耗", -q_consume_qty, date.today().isoformat(), f"[{selected_fridge_name}] 快速取用"))
+                                    (fid_q, "取出/消耗", -q_consume_qty, date.today().isoformat(), f"[{selected_fridge_name}] 快速取用 ({st.session_state.username})"))
                         con.commit()
                         con.close()
                         st.success(f"成功取出 {fname_q} 共 {q_consume_qty:g} {funit_q or ''}！")
@@ -275,7 +353,7 @@ with tab1:
                             con = get_db()
                             con.execute("UPDATE foods SET quantity = ? WHERE id = ?", (new_qty, fid))
                             con.execute("INSERT INTO transactions(food_id, action, quantity, trans_date, note) VALUES(?,?,?,?,?)",
-                                        (fid, "取出/消耗", -consume_qty, date.today().isoformat(), f"[{selected_fridge_name}] 手動取用"))
+                                        (fid, "取出/消耗", -consume_qty, date.today().isoformat(), f"[{selected_fridge_name}] 手動取用 ({st.session_state.username})"))
                             con.commit()
                             con.close()
                             st.success(f"成功取出 {name} 共 {consume_qty:g} {unit or ''}！")
@@ -314,13 +392,17 @@ with tab1:
                         st.success(f"已將 {name} 加入 {selected_fridge_name} 的採買清單")
                         st.rerun()
                 with col_b:
-                    if st.button("刪除品項", key=f"del_{fid}", type="primary"):
-                        con = get_db()
-                        con.execute("DELETE FROM foods WHERE id = ?", (fid,))
-                        con.commit()
-                        con.close()
-                        st.success("已刪除品項，歷史紀錄已保留。")
-                        st.rerun()
+                    # 刪除品項：權限檢查（僅限管理員或皆可？這裡設定為管理者或允許一般人刪除，視需求而定，此處保留讓管理者專用或皆可，示範中嚴格限制刪除需為 admin，或者只要登入即可）
+                    if st.session_state.role == "admin":
+                        if st.button("刪除品項", key=f"del_{fid}", type="primary"):
+                            con = get_db()
+                            con.execute("DELETE FROM foods WHERE id = ?", (fid,))
+                            con.commit()
+                            con.close()
+                            st.success("已刪除品項，歷史紀錄已保留。")
+                            st.rerun()
+                    else:
+                        st.caption("🔒 刪除品項需要管理者權限")
 
 # --- 標籤二：手機拍照與 AI 辨識入庫 ---
 with tab2:
@@ -349,7 +431,7 @@ with tab2:
                 cur.execute("""INSERT INTO foods 
                     (fridge_id, name, category, quantity, unit, location, purchase_date, expiry_date, note)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (current_fridge_id, f_name, f_cat, f_qty, f_unit, f_loc, date.today().isoformat(), f_expiry.isoformat(), "AI 拍照辨識入庫"))
+                    (current_fridge_id, f_name, f_cat, f_qty, f_unit, f_loc, date.today().isoformat(), f_expiry.isoformat(), f"AI 拍照辨識入庫 ({st.session_state.username})"))
                 fid = cur.lastrowid
                 cur.execute("INSERT INTO transactions(food_id, action, quantity, trans_date, note) VALUES(?,?,?,?,?)",
                             (fid, "入庫", f_qty, date.today().isoformat(), f"[{selected_fridge_name}] AI 拍照入庫"))
@@ -402,7 +484,7 @@ with tab3:
                             cur.execute("""INSERT INTO foods 
                                 (fridge_id, name, category, quantity, unit, location, purchase_date, expiry_date, note)
                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                                (current_fridge_id, sname, "其他", sqty, sunit, sloc or "冷藏", date.today().isoformat(), sexp or date.today().isoformat(), "從採買清單入庫"))
+                                (current_fridge_id, sname, "其他", sqty, sunit, sloc or "冷藏", date.today().isoformat(), sexp or date.today().isoformat(), f"從採買清單入庫 ({st.session_state.username})"))
                             fid = cur.lastrowid
                             cur.execute("INSERT INTO transactions(food_id, action, quantity, trans_date, note) VALUES(?,?,?,?,?)",
                                         (fid, "入庫", sqty, date.today().isoformat(), f"[{selected_fridge_name}] 採買清單轉入"))
@@ -424,7 +506,6 @@ with tab4:
     st.subheader(f"📜 食材進出與取出紀錄 ({selected_fridge_name})")
     con = get_db()
     cur = con.cursor()
-    # 僅顯示屬於該冰箱內的食材交易紀錄
     cur.execute("""
         SELECT t.id, COALESCE(f.name, '(已刪除食材)'), t.action, t.quantity, t.trans_date, t.note
         FROM transactions t
