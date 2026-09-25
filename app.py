@@ -176,6 +176,34 @@ with col_top2:
         st.session_state.role = ""
         st.rerun()
 
+# 讓所有使用者都可以修改自己的密碼
+with st.expander("🔑 修改個人密碼"):
+    with st.form("change_password_form"):
+        old_pass = st.text_input("輸入舊密碼", type="password")
+        new_pass1 = st.text_input("輸入新密碼", type="password")
+        new_pass2 = st.text_input("再次確認新密碼", type="password")
+        submit_pw = st.form_submit_button("確認修改密碼")
+        
+        if submit_pw:
+            if not old_pass or not new_pass1 or not new_pass2:
+                st.warning("所有欄位皆必須填寫！")
+            elif new_pass1 != new_pass2:
+                st.error("兩次輸入的新密碼不相符！")
+            else:
+                con = get_db()
+                cur = con.cursor()
+                cur.execute("SELECT password FROM users WHERE username = ?", (st.session_state.username,))
+                db_pass = cur.fetchone()[0]
+                
+                if db_pass != hash_password(old_pass):
+                    st.error("舊密碼輸入錯誤！")
+                else:
+                    cur.execute("UPDATE users SET password = ? WHERE username = ?", 
+                                (hash_password(new_pass1), st.session_state.username))
+                    con.commit()
+                    con.close()
+                    st.success("密碼修改成功！下次登入請使用新密碼。")
+
 st.divider()
 
 def parse_date(value):
