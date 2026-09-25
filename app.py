@@ -93,8 +93,42 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["📦 庫存", "📸 拍照AI", "🛒 �
 
 # --- 標籤一：食材庫存與取用管理 ---
 with tab1:
-    st.subheader("冰箱庫存清單與取用")
+    st.subheader("🍽️ 快速取用與庫存管理")
     
+    # ⚡ 【新增】快速取用專區（免點開選單，直接在上方快速扣除庫存）
+    with st.expander("⚡ 快速取用消耗食材", expanded=True):
+        con_quick = get_db()
+        cur_q = con_quick.cursor()
+        cur_q.execute("SELECT id, name, quantity, unit FROM foods WHERE quantity > 0 ORDER BY name")
+        active_foods = cur_q.fetchall()
+        con_quick.close()
+        
+        if not active_foods:
+            st.info("目前沒有庫存大於 0 的食材可供取用。")
+        else:
+            food_options = {f"{item[1]} (現有: {item[2]:g} {item[3] or ''})": item for item in active_foods}
+            selected_label = st.selectbox("選擇要取用的食材", options=list(food_options.keys()))
+            
+            if selected_label:
+                chosen_item = food_options[selected_label]
+                fid_q, fname_q, fqty_q, funit_q = chosen_item
+                
+                with st.form("quick_consume_form"):
+                    q_consume_qty = st.number_input("取用數量", min_value=0.1, max_value=float(fqty_q), value=1.0 if fqty_q >= 1.0 else fqty_q, step=0.1)
+                    q_submitted = st.form_submit_button("確認取出並扣減庫存")
+                    
+                    if q_submitted:
+                        new_qty = fqty_q - q_consume_qty
+                        con = get_db()
+                        con.execute("UPDATE foods SET quantity = ? WHERE id = ?", (new_qty, fid_q))
+                        con.execute("INSERT INTO transactions(food_id, action, quantity, trans_date, note) VALUES(?,?,?,?,?)",
+                                    (fid_q, "取出/消耗", -q_consume_qty, date.today().isoformat(), "手機快速取用"))
+                        con.commit()
+                        con.close()
+                        st.success(f"成功取出 {fname_q} 共 {q_consume_qty:g} {funit_q or ''}！")
+                        st.rerun()
+
+    st.divider()
     search_query = st.text_input("🔍 搜尋食材名稱/分類/位置", placeholder="輸入關鍵字...")
     
     con = get_db()
@@ -119,8 +153,9 @@ with tab1:
                 st.write(f"**分類**: {cat or '未分類'} | **位置**: {loc or '未指定'}")
                 st.write(f"**有效期限**: {expiry or '未設定'}")
                 
+                # 單一品項的詳細取用表單
                 with st.form(key=f"consume_form_{fid}"):
-                    st.markdown("##### 🍽️ 取用/消耗材料")
+                    st.markdown("##### 🍽️ 單品取用/消耗")
                     consume_qty = st.number_input("輸入取用數量", min_value=0.1, max_value=float(qty) if qty > 0 else 1.0, value=1.0, step=0.1, key=f"c_qty_{fid}")
                     c_submitted = st.form_submit_button("確認取出")
                     
