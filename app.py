@@ -176,7 +176,6 @@ if not st.session_state.logged_in:
     
     st.markdown("---")
     st.caption("💡 **預設測試帳號**：")
-    st.caption("- 管理員：`admin` / 密碼：`admin123`")
     st.caption("- 一般使用者：`user` / 密碼：`user123`")
     st.stop()
 
