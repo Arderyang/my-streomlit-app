@@ -10,7 +10,7 @@ LOCATIONS = ["冷藏", "冷凍", "蔬果室", "其他"]
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-# 1. 初始化資料庫（新增 fridges, users 資料表）
+# 1. 初始化資料庫（新增 recipes 食譜資料表）
 def init_db():
     con = sqlite3.connect(DB_FILE, check_same_thread=False)
     cur = con.cursor()
@@ -31,6 +31,16 @@ def init_db():
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
     
+    # 食譜資料表
+    cur.execute("""CREATE TABLE IF NOT EXISTS recipes(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        category TEXT,
+        ingredients TEXT, -- 儲存所需食材與份量，例如：高麗菜:半顆, 豬肉片:200g
+        instructions TEXT, -- 烹調步驟
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    
     # 預設至少有一台主冰箱
     cur.execute("SELECT COUNT(*) FROM fridges")
     if cur.fetchone()[0] == 0:
@@ -43,6 +53,14 @@ def init_db():
                     ("admin", hash_password("admin123"), "admin"))
         cur.execute("INSERT INTO users(username, password, role) VALUES(?, ?, ?)", 
                     ("user", hash_password("user123"), "user"))
+
+    # 預設範例食譜
+    cur.execute("SELECT COUNT(*) FROM recipes")
+    if cur.fetchone()[0] == 0:
+        cur.execute("INSERT INTO recipes(name, category, ingredients, instructions) VALUES(?, ?, ?, ?)",
+                    ("高麗菜炒豬肉", "家常菜", "高麗菜:0.5, 豬肉片:200, 蒜頭:2", "1. 熱鍋下油爆香蒜頭。\n2. 加入豬肉片炒至半熟。\n3. 放入高麗菜拌炒至熟軟即完成。"))
+        cur.execute("INSERT INTO recipes(name, category, ingredients, instructions) VALUES(?, ?, ?, ?)",
+                    ("番茄炒蛋", "家常菜", "番茄:2, 雞蛋:3, 蔥:1", "1. 雞蛋先打散炒熟備用。\n2. 番茄切塊下鍋炒出汁。\n3. 加入炒好的雞蛋拌勻調味。"))
 
     cur.execute("""CREATE TABLE IF NOT EXISTS foods(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -302,8 +320,8 @@ if st.session_state.role == "admin":
 
 st.divider()
 
-# 3. 手機版分頁介面
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📦 庫存", "📸 拍照AI", "🛒 採買", "📜 取出紀錄", "📊 報表"])
+# 3. 手機版分頁介面 (新增 🍳 食譜)
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📦 庫存", "📸 拍照AI", "🛒 採買", "🍳 食譜", "📜 取出紀錄", "📊 報表"])
 
 # --- 標籤一：食材庫存與完整 CRUD 管理 ---
 with tab1:
@@ -558,8 +576,129 @@ with tab3:
                         con.close()
                         st.rerun()
 
-# --- 標籤四：取出/異動紀錄 ---
+# --- 標籤四：食譜與智慧推薦 ---
 with tab4:
+    st.subheader("🍳 食譜清單與冰箱食材比對")
+    
+    with st.expander("➕ 手動新增食譜"):
+        with st.form("add_recipe_form"):
+            r_name = st.text_input("料理名稱*")
+            r_cat = st.selectbox("食譜分類", ["家常菜", "湯品", "甜點", "主食", "異國料理", "其他"])
+            r_ing = st.text_area("所需食材與份量 (格式：食材名稱:數量，多筆用逗號隔開)", placeholder="例如：高麗菜:0.5, 豬肉片:200")
+            r_inst = st.text_area("烹調步驟", placeholder="1. 步驟一...\n2. 步驟二...")
+            r_submit = st.form_submit_button("儲存食譜")
+            
+            if r_submit:
+                if not r_name.strip() or not r_ing.strip():
+                    st.warning("料理名稱與所需食材不可為空白！")
+                else:
+                    try:
+                        con = get_db()
+                        con.execute("INSERT INTO recipes(name, category, ingredients, instructions) VALUES(?,?,?,?)",
+                                    (r_name.strip(), r_cat, r_ing.strip(), r_inst.strip()))
+                        con.commit()
+                        con.close()
+                        st.success(f"成功新增食譜：{r_name.strip()}")
+                        st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.error("該料理名稱已存在！")
+
+    with st.expander("📥 批次匯入食譜清單 (文字格式)"):
+        st.markdown("請依照格式貼上多筆食譜（每行一筆）：\n`料理名稱 | 分類 | 食材1:數量, 食材2:數量 | 步驟內容`")
+        batch_text = st.text_area("批次食譜資料", placeholder="香菇雞湯 | 湯品 | 雞肉:500, 乾香菇:5 | 1. 香菇泡軟\n2. 雞肉川燙後入鍋熬煮")
+        if st.button("確認批次匯入"):
+            if batch_text.strip():
+                lines = batch_text.strip().split("\n")
+                success_count = 0
+                con = get_db()
+                cur = con.cursor()
+                for line in lines:
+                    parts = line.split("|")
+                    if len(parts) >= 4:
+                        try:
+                            cur.execute("INSERT OR IGNORE INTO recipes(name, category, ingredients, instructions) VALUES(?,?,?,?)",
+                                        (parts[0].strip(), parts[1].strip(), parts[2].strip(), parts[3].strip()))
+                            if cur.rowcount > 0:
+                                success_count += 1
+                        except Exception:
+                            pass
+                con.commit()
+                con.close()
+                st.success(f"成功匯入 {success_count} 筆新食譜！")
+                st.rerun()
+            else:
+                st.warning("請輸入要匯入的食譜內容！")
+
+    st.divider()
+    
+    # 讀取冰箱現有庫存名稱
+    con = get_db()
+    cur = con.cursor()
+    cur.execute("SELECT name, quantity FROM foods WHERE fridge_id = ? AND quantity > 0", (current_fridge_id,))
+    fridge_foods = {row[0]: row[1] for row in cur.fetchall()}
+    
+    cur.execute("SELECT id, name, category, ingredients, instructions FROM recipes ORDER BY id DESC")
+    recipes = cur.fetchall()
+    con.close()
+
+    if not recipes:
+        st.info("目前尚無任何食譜，請透過上方新增或匯入！")
+    else:
+        st.markdown("### 📖 現有食譜與材料對照")
+        for rid, rname, rcat, ringredients, rinstructions in recipes:
+            # 檢查冰箱是否具備所需食材
+            missing_items = []
+            has_all = True
+            
+            # 解析 ingredients 比如 "高麗菜:0.5, 豬肉片:200"
+            items = ringredients.split(",")
+            for item in items:
+                if ":" in item:
+                    iname, iqty = item.split(":")
+                    iname = iname.strip()
+                    try:
+                        required_q = float(iqty.strip())
+                    except ValueError:
+                        required_q = 1.0
+                    
+                    # 簡單檢查冰箱是否有包含該名稱的食材且庫存足夠
+                    found_match = False
+                    for fname, fqty in fridge_foods.items():
+                        if iname in fname:
+                            found_match = True
+                            break
+                    if not found_match:
+                        has_all = False
+                        missing_items.append(iname)
+
+            badge = "🟢 材料齊全可烹調" if has_all else f"🟠 缺少材料 ({len(missing_items)}樣)"
+            
+            with st.expander(f"{badge} | {rname} ({rcat or '未分類'})"):
+                st.markdown(f"**所需食材**：`{ringredients}`")
+                st.markdown(f"**烹調步驟**：\n{rinstructions or '無步驟說明'}")
+                
+                if not has_all:
+                    if st.button("🛒 將缺少的食材加入採買清單", key=f"add_missing_{rid}"):
+                        con = get_db()
+                        for m_item in missing_items:
+                            con.execute("INSERT INTO shopping_list(fridge_id, name, quantity, unit, location, expiry_date) VALUES(?,?,?,?,?,?)",
+                                        (current_fridge_id, m_item, 1, "個", "冷藏", (date.today() + timedelta(days=7)).isoformat()))
+                        con.commit()
+                        con.close()
+                        st.success(f"已將缺少的食材 ({', '.join(missing_items)}) 加入 {selected_fridge_name} 的採買清單！")
+                        st.rerun()
+                
+                if st.session_state.role == "admin":
+                    if st.button("🗑️ 刪除此食譜", key=f"del_recipe_{rid}", type="primary"):
+                        con = get_db()
+                        con.execute("DELETE FROM recipes WHERE id = ?", (rid,))
+                        con.commit()
+                        con.close()
+                        st.success("已刪除食譜！")
+                        st.rerun()
+
+# --- 標籤五：取出/異動紀錄 ---
+with tab5:
     st.subheader(f"📜 食材進出與取出紀錄 ({selected_fridge_name})")
     con = get_db()
     cur = con.cursor()
@@ -581,8 +720,8 @@ with tab4:
             st.write(f"動作：`{action}` | 數量：`{tqty:g}` | 備註：{tnote}")
             st.divider()
 
-# --- 標籤五：到期與統計報表 ---
-with tab5:
+# --- 標籤六：到期與統計報表 ---
+with tab6:
     st.subheader(f"📊 冰箱狀態總覽 ({selected_fridge_name})")
     con = get_db()
     cur = con.cursor()
