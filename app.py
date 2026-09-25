@@ -95,7 +95,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["📦 庫存", "📸 拍照AI", "🛒 �
 with tab1:
     st.subheader("📦 冰箱庫存與管理")
     
-    # 【新增功能 1】手動新增食材表單
+    # 手動新增食材表單
     with st.expander("➕ 手動新增食材到庫存"):
         with st.form("manual_add_form"):
             m_name = st.text_input("食材名稱*")
@@ -144,7 +144,8 @@ with tab1:
                 fid_q, fname_q, fqty_q, funit_q = chosen_item
                 
                 with st.form("quick_consume_form"):
-                    q_consume_qty = st.number_input("取用數量", min_value=0.1, max_value=float(fqty_q), value=1.0 if fqty_q >= 1.0 else fqty_q, step=0.1)
+                    default_q = min(1.0, fqty_q)
+                    q_consume_qty = st.number_input("取用數量", min_value=0.1, max_value=float(fqty_q), value=default_q, step=0.1)
                     q_submitted = st.form_submit_button("確認取出並扣減庫存")
                     
                     if q_submitted:
@@ -183,10 +184,12 @@ with tab1:
                 st.write(f"**分類**: {cat or '未分類'} | **位置**: {loc or '未指定'}")
                 st.write(f"**有效期限**: {expiry or '未設定'}")
                 
-                # 取用消耗表單
+                # 取用消耗表單（防呆處理預設值）
                 with st.form(key=f"consume_form_{fid}"):
                     st.markdown("##### 🍽️ 單品取用/消耗")
-                    consume_qty = st.number_input("輸入取用數量", min_value=0.1, max_value=float(qty) if qty > 0 else 1.0, value=1.0, step=0.1, key=f"c_qty_{fid}")
+                    max_c = float(qty) if qty > 0 else 0.1
+                    default_c = min(1.0, max_c)
+                    consume_qty = st.number_input("輸入取用數量", min_value=0.1, max_value=max_c, value=default_c, step=0.1, key=f"c_qty_{fid}")
                     c_submitted = st.form_submit_button("確認取出")
                     
                     if c_submitted:
@@ -203,7 +206,7 @@ with tab1:
                             st.success(f"成功從冰箱取出 {name} 共 {consume_qty:g} {unit or ''}！")
                             st.rerun()
 
-                # 【新增功能 2】修改食材資料表單
+                # 修改食材資料表單
                 with st.form(key=f"edit_form_{fid}"):
                     st.markdown("##### ✏️ 修改食材資料")
                     e_name = st.text_input("食材名稱", value=name, key=f"e_name_{fid}")
@@ -236,7 +239,6 @@ with tab1:
                         st.success(f"已將 {name} 加入採買清單")
                         st.rerun()
                 with col_b:
-                    # 【新增功能 3】刪除食物
                     if st.button("刪除品項", key=f"del_{fid}", type="primary"):
                         con = get_db()
                         con.execute("DELETE FROM foods WHERE id = ?", (fid,))
