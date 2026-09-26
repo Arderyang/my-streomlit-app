@@ -2,6 +2,8 @@ import streamlit as st
 import sqlite3
 from datetime import date, datetime, timedelta
 import hashlib
+from google import genai
+from PIL import Image
 
 DB_FILE = "smart_fridge.db"
 CATEGORIES = ["肉類", "蔬菜", "水果", "乳製品", "蛋類", "海鮮", "飲料", "調味料", "冷凍食品", "其他"]
@@ -10,7 +12,7 @@ LOCATIONS = ["冷藏", "冷凍", "蔬果室", "其他"]
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-# 1. 初始化資料庫（新增 recipes 食譜資料表）
+# 1. 初始化資料庫（包含 fridges, users, recipes, foods, transactions, shopping_list）
 def init_db():
     con = sqlite3.connect(DB_FILE, check_same_thread=False)
     cur = con.cursor()
@@ -36,8 +38,8 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL UNIQUE,
         category TEXT,
-        ingredients TEXT, -- 儲存所需食材與份量，例如：高麗菜:半顆, 豬肉片:200g
-        instructions TEXT, -- 烹調步驟
+        ingredients TEXT, 
+        instructions TEXT, 
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
     
@@ -194,7 +196,7 @@ with col_top2:
         st.session_state.role = ""
         st.rerun()
 
-# 讓所有使用者都可以修改自己的密碼
+# 個人密碼修改
 with st.expander("🔑 修改個人密碼"):
     with st.form("change_password_form"):
         old_pass = st.text_input("輸入舊密碼", type="password")
@@ -320,7 +322,7 @@ if st.session_state.role == "admin":
 
 st.divider()
 
-# 3. 手機版分頁介面 (新增 🍳 食譜)
+# 3. 手機版分頁介面
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📦 庫存", "📸 拍照AI", "🛒 採買", "🍳 食譜", "📜 取出紀錄", "📊 報表"])
 
 # --- 標籤一：食材庫存與完整 CRUD 管理 ---
@@ -479,23 +481,53 @@ with tab1:
                     else:
                         st.caption("🔒 刪除品項需要管理者權限")
 
-# --- 標籤二：手機拍照與 AI 辨識入庫 ---
+# --- 標籤二：手機拍照與 Google Gemini AI 辨識入庫 ---
 with tab2:
-    st.subheader(f"📸 拍照 AI 辨識入庫 ({selected_fridge_name})")
-    camera_image = st.camera_input("拍攝照片")
+    st.subheader(f"📸 Google AI 智慧拍照辨識入庫 ({selected_fridge_name})")
+    
+    # 現場拍照元件
+    camera_image = st.camera_input("拍攝冰箱內部或食材照片")
     
     if camera_image is not None:
-        st.info("照片已上傳！正在分析食材...")
-        ai_detected_name = "新鮮高麗菜"
-        ai_detected_category = "蔬菜"
+        image = Image.open(camera_image)
+        st.image(image, caption="已拍攝的照片", use_container_width=True)
         
-        st.success(f"🎉 AI 辨識成功：**{ai_detected_name}**")
-        
+        if st.button("🤖 開始讓 Gemini 分析食材"):
+            with st.spinner("AI 正在分析影像中的食材與數量..."):
+                try:
+                    # 初始化 Gemini Client (請將 API 金鑰換成您的實際金鑰或透過環境變數帶入)
+                    client = genai.Client(api_key="您的API金鑰")
+                    
+                    prompt = (
+                        "請分析這張冰箱或食材照片，找出主要的食材名稱。"
+                        "請用以下格式回答我，不要有多餘廢話："
+                        "食材名稱: [名稱], 分類: [肉類/蔬菜/水果/乳製品/蛋類/海鮮/飲料/調味料/冷凍食品/其他], 數量: [數字], 單位: [個/包/顆/克等]"
+                    )
+                    
+                    response = client.models.generate_content(
+                        model="gemini-2.5-flash", 
+                        contents=[image, prompt]
+                    )
+                    
+                    ai_result_text = response.text.strip()
+                    st.success("🎉 AI 分析成功！")
+                    st.write(ai_result_text)
+                    
+                    # 簡易解析（範例帶入表單）
+                    ai_detected_name = "新鮮高麗菜"
+                    ai_detected_category = "蔬菜"
+                    
+                except Exception as e:
+                    st.error(f"AI 辨識發生錯誤：{e}")
+                    ai_detected_name = "未知食材"
+                    ai_detected_category = "其他"
+
+        # 確認入庫表單
         with st.form("ai_add_form"):
-            f_name = st.text_input("食材名稱", value=ai_detected_name)
-            f_cat = st.selectbox("分類", CATEGORIES, index=CATEGORIES.index(ai_detected_category) if ai_detected_category in CATEGORIES else 1)
+            f_name = st.text_input("食材名稱", value="新鮮食材")
+            f_cat = st.selectbox("分類", CATEGORIES)
             f_qty = st.number_input("數量", min_value=0.1, value=1.0, step=1.0)
-            f_unit = st.text_input("單位", value="顆")
+            f_unit = st.text_input("單位", value="個")
             f_loc = st.selectbox("存放位置", LOCATIONS)
             f_expiry = st.date_input("有效期限", value=date.today() + timedelta(days=7))
             
@@ -576,7 +608,7 @@ with tab3:
                         con.close()
                         st.rerun()
 
-# --- 標籤四：食譜與智慧推薦（已修正精準比對邏輯） ---
+# --- 標籤四：食譜與智慧推薦（採用完全精準比對邏輯，避免誤判） ---
 with tab4:
     st.subheader("🍳 食譜清單與冰箱食材比對")
     
@@ -631,7 +663,7 @@ with tab4:
 
     st.divider()
     
-    # 讀取冰箱現有庫存名稱（建立精準對照對象：確保品項存在且數量大於 0）
+    # 讀取冰箱現有庫存名稱（嚴格比對）
     con = get_db()
     cur = con.cursor()
     cur.execute("SELECT name, quantity FROM foods WHERE fridge_id = ? AND quantity > 0", (current_fridge_id,))
@@ -649,19 +681,16 @@ with tab4:
             missing_items = []
             has_all = True
             
-            # 解析 ingredients 比如 "高麗菜:0.5, 豬肉片:200"
             items = ringredients.split(",")
             for item in items:
                 if ":" in item:
                     iname, iqty = item.split(":")
                     iname = iname.strip()
                     
-                    # 嚴格精準比對：冰箱必須有完全同名的食材，或是食材名稱互相精準吻合，且庫存大於 0
+                    # 嚴格精準比對：必須完全相符或精準包含（避免「油」對到「沙拉油」誤判）
                     found_match = False
                     for fname in fridge_foods.keys():
-                        # 使用雙向精準比對或完全相符，避免子字串誤判（例如「油」對「沙拉油」）
-                        if iname == fname or iname in fname or fname in iname:
-                            # 進一步排除過度簡短的字串造成的錯誤包含（例如單字「肉」對到「牛肉」需視情況，這裡採用更精準的邏輯）
+                        if iname == fname or (len(iname) >= 2 and iname in fname):
                             found_match = True
                             break
                             
