@@ -505,7 +505,7 @@ with tab2:
                     # 優先使用輸入框的金鑰，若無則嘗試環境變數或預設值
                     active_key = api_key_input.strip() if api_key_input.strip() else "您的API金鑰"
                     
-                    client = genai.Client(api_key=active_key)
+                    client = genai.Client(api_key=AQ.Ab8RN6KhQqjsCwq0J79OMacvXW8k_xmqZQvrHIDDhfW7pi_2ow)
                     
                     prompt = (
                         "請仔細分析這張照片中的主要食材及其數量。請嚴格依照下列格式回答，不要有其他廢話：\n"
