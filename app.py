@@ -496,7 +496,7 @@ with tab2:
             with st.spinner("AI 正在分析影像中的食材與數量..."):
                 try:
                     # 初始化 Gemini Client (請將 API 金鑰換成您的實際金鑰或透過環境變數帶入)
-                    client = genai.Client(api_key="您的API金鑰")
+                    client = genai.Client(api_key="AQ.Ab8RN6KhQqjsCwq0J79OMacvXW8k_xmqZQvrHIDDhfW7pi_2ow")
                     
                     prompt = (
                         "請分析這張冰箱或食材照片，找出主要的食材名稱。"
