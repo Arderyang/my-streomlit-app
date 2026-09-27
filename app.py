@@ -1,4 +1,3 @@
-import google.generativeai as genai
 import streamlit as st
 import sqlite3
 from datetime import date, datetime, timedelta
@@ -368,20 +367,24 @@ with tab1:
                 st.write(f"**分類**: {cat or '未分類'} | **位置**: {loc or '未指定'}")
                 st.write(f"**有效期限**: {expiry or '未設定'}")
                 
-                with st.form(key=f"consume_form_{fid}"):
-                    consume_qty = st.number_input("輸入取用數量", min_value=0.1, max_value=float(qty) if qty>0 else 0.1, value=min(1.0, float(qty) if qty>0 else 1.0), step=0.1)
-                    if st.form_submit_button("確認取出"):
-                        if consume_qty > qty:
-                            st.error("取用數量大於目前庫存！")
-                        else:
-                            con = get_db()
-                            con.execute("UPDATE foods SET quantity = ? WHERE id = ?", (qty - consume_qty, fid))
-                            con.execute("INSERT INTO transactions(food_id, action, quantity, trans_date, note) VALUES(?,?,?,?,?)",
-                                        (fid, "取出/消耗", -consume_qty, date.today().isoformat(), "手動取用"))
-                            con.commit()
-                            con.close()
-                            st.success("取出成功！")
-                            st.rerun()
+                # 防呆修正：如果數量大於 0 才顯示取用表單，避免數量為 0 時觸發 StreamlitValueAboveMaxError 錯誤
+                if qty > 0:
+                    with st.form(key=f"consume_form_{fid}"):
+                        consume_qty = st.number_input("輸入取用數量", min_value=0.1, max_value=float(qty), value=min(1.0, float(qty)), step=0.1)
+                        if st.form_submit_button("確認取出"):
+                            if consume_qty > qty:
+                                st.error("取用數量大於目前庫存！")
+                            else:
+                                con = get_db()
+                                con.execute("UPDATE foods SET quantity = ? WHERE id = ?", (qty - consume_qty, fid))
+                                con.execute("INSERT INTO transactions(food_id, action, quantity, trans_date, note) VALUES(?,?,?,?,?)",
+                                            (fid, "取出/消耗", -consume_qty, date.today().isoformat(), "手動取用"))
+                                con.commit()
+                                con.close()
+                                st.success("取出成功！")
+                                st.rerun()
+                else:
+                    st.info("此品項庫存已為 0，無法繼續取出。")
 
 # --- 標籤二：手機拍照與 Google Gemini AI 辨識入庫 ---
 with tab2:
@@ -400,7 +403,6 @@ with tab2:
         if st.button("🤖 開始讓 Gemini 分析食材"):
             with st.spinner("AI 正在分析影像中的食材與數量..."):
                 try:
-                    # 直接從 Streamlit secrets 自動讀取金鑰，畫面上不再顯示輸入框
                     active_key = ""
                     try:
                         if "GEMINI_API_KEY" in st.secrets:
@@ -472,6 +474,7 @@ with tab2:
             con.close()
             st.success(f"成功將 {f_qty:g} {f_unit} 的 {f_name.strip()} 加入！")
             st.rerun()
+
 # --- 標籤三：採買 ---
 with tab3:
     st.subheader(f"🛒 採買清單 ({selected_fridge_name})")
