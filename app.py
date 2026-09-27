@@ -419,7 +419,7 @@ with tab2:
                     
                     # 呼叫 Gemini 模型 (改用最穩定的通用模型)
                     response = client.models.generate_content(
-                        model="gemini-2.5-flash", 
+                        model="gemini-3.8-flash", 
                         contents=[image, prompt]
                     )
                     
