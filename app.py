@@ -448,17 +448,19 @@ with tab2:
                 except Exception as e:
                     st.error(f"AI 辨識發生錯誤：{e}")
 
-    with st.form("ai_add_form"):
-        st.markdown("##### 📝 確認辨識與入庫資訊")
-        f_name = st.text_input("食材名稱", value=st.session_state.ai_name)
-        f_cat = st.selectbox("分類", CATEGORIES, index=CATEGORIES.index(st.session_state.ai_cat) if st.session_state.ai_cat in CATEGORIES else 4)
-        f_qty = st.number_input("數量", min_value=0.1, value=float(st.session_state.ai_qty), step=1.0)
-        f_unit = st.text_input("單位", value=st.session_state.ai_unit)
-        f_loc = st.selectbox("存放位置", LOCATIONS)
-        f_expiry = st.date_input("有效期限", value=date.today() + timedelta(days=14))
-        
-        submitted = st.form_submit_button("確認入庫")
-        if submitted:
+    # 改用一般輸入欄位與按鈕（非 st.form），確保成功訊息能完整顯示並防止重複點擊
+    st.markdown("##### 📝 確認辨識與入庫資訊")
+    f_name = st.text_input("食材名稱", value=st.session_state.ai_name, key="input_ai_name")
+    f_cat = st.selectbox("分類", CATEGORIES, index=CATEGORIES.index(st.session_state.ai_cat) if st.session_state.ai_cat in CATEGORIES else 4, key="input_ai_cat")
+    f_qty = st.number_input("數量", min_value=0.1, value=float(st.session_state.ai_qty), step=1.0, key="input_ai_qty")
+    f_unit = st.text_input("單位", value=st.session_state.ai_unit, key="input_ai_unit")
+    f_loc = st.selectbox("存放位置", LOCATIONS, key="input_ai_loc")
+    f_expiry = st.date_input("有效期限", value=date.today() + timedelta(days=14), key="input_ai_expiry")
+    
+    if st.button("確認入庫", type="primary"):
+        if not f_name.strip():
+            st.warning("請輸入食材名稱！")
+        else:
             con = get_db()
             cur = con.cursor()
             cur.execute("""INSERT INTO foods 
@@ -471,12 +473,12 @@ with tab2:
             con.commit()
             con.close()
             
-            # 成功入庫後重設預設值，避免重複送出
+            # 顯示明確的成功提示訊息
+            st.success(f"✅ 成功將 {f_qty:g} {f_unit} 的 {f_name.strip()} 加入冰箱！")
+            
+            # 清空 AI 狀態
             st.session_state.ai_name = "雞蛋"
             st.session_state.ai_qty = 1.0
-            
-            st.success(f"成功將 {f_qty:g} {f_unit} 的 {f_name.strip()} 加入！")
-            st.rerun()
 # --- 標籤三：採買 ---
 with tab3:
     st.subheader(f"🛒 採買清單 ({selected_fridge_name})")
