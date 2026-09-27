@@ -348,17 +348,18 @@ with tab1:
     search_query = st.text_input("🔍 搜尋食材名稱/分類/位置", placeholder="輸入關鍵字...")
     con = get_db()
     cur = con.cursor()
+    # 僅查詢數量大於 0 的食材，數量為 0 時自動不顯示在頁面上
     if search_query:
         cur.execute("""SELECT id, name, category, quantity, unit, location, expiry_date 
-                       FROM foods WHERE fridge_id = ? AND (name LIKE ? OR category LIKE ? OR location LIKE ?) ORDER BY expiry_date""", 
+                       FROM foods WHERE fridge_id = ? AND quantity > 0 AND (name LIKE ? OR category LIKE ? OR location LIKE ?) ORDER BY expiry_date""", 
                     (current_fridge_id, f"%{search_query}%", f"%{search_query}%", f"%{search_query}%"))
     else:
-        cur.execute("SELECT id, name, category, quantity, unit, location, expiry_date FROM foods WHERE fridge_id = ? ORDER BY expiry_date", (current_fridge_id,))
+        cur.execute("SELECT id, name, category, quantity, unit, location, expiry_date FROM foods WHERE fridge_id = ? AND quantity > 0 ORDER BY expiry_date", (current_fridge_id,))
     rows = cur.fetchall()
     con.close()
 
     if not rows:
-        st.info(f"[{selected_fridge_name}] 目前沒有找到任何食材記錄。")
+        st.info(f"[{selected_fridge_name}] 目前沒有找到任何庫存食材記錄。")
     else:
         for row in rows:
             fid, name, cat, qty, unit, loc, expiry = row
@@ -367,7 +368,6 @@ with tab1:
                 st.write(f"**分類**: {cat or '未分類'} | **位置**: {loc or '未指定'}")
                 st.write(f"**有效期限**: {expiry or '未設定'}")
                 
-                # 防呆修正：如果數量大於 0 才顯示取用表單，避免數量為 0 時觸發 StreamlitValueAboveMaxError 錯誤
                 if qty > 0:
                     with st.form(key=f"consume_form_{fid}"):
                         consume_qty = st.number_input("輸入取用數量", min_value=0.1, max_value=float(qty), value=min(1.0, float(qty)), step=0.1)
@@ -383,8 +383,6 @@ with tab1:
                                 con.close()
                                 st.success("取出成功！")
                                 st.rerun()
-                else:
-                    st.info("此品項庫存已為 0，無法繼續取出。")
 
 # --- 標籤二：手機拍照與 Google Gemini AI 辨識入庫 ---
 with tab2:
@@ -578,9 +576,9 @@ with tab6:
     st.subheader(f"📊 冰箱狀態總覽 ({selected_fridge_name})")
     con = get_db()
     cur = con.cursor()
-    cur.execute("SELECT COUNT(*), COALESCE(SUM(quantity),0) FROM foods WHERE fridge_id = ?", (current_fridge_id,))
+    cur.execute("SELECT COUNT(*), COALESCE(SUM(quantity),0) FROM foods WHERE fridge_id = ? AND quantity > 0", (current_fridge_id,))
     count, total = cur.fetchone()
-    cur.execute("SELECT name, quantity, unit, expiry_date FROM foods WHERE fridge_id = ? AND expiry_date<>'' AND expiry_date IS NOT NULL ORDER BY expiry_date", (current_fridge_id,))
+    cur.execute("SELECT name, quantity, unit, expiry_date FROM foods WHERE fridge_id = ? AND quantity > 0 AND expiry_date<>'' AND expiry_date IS NOT NULL ORDER BY expiry_date", (current_fridge_id,))
     all_foods = cur.fetchall()
     con.close()
     st.metric("總食材品項數", f"{count} 項")
