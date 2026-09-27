@@ -1,3 +1,4 @@
 google-genai
+google-generativeai
 streamlit
 google-generativeai>=0.0.0
