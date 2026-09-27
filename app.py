@@ -526,7 +526,20 @@ with tab2:
             with st.spinner("AI 正在分析影像中的食材與數量..."):
                 try:
                     # 初始化 Gemini Client (請將 API 金鑰換成您的實際金鑰或透過環境變數帶入)
-                    client = genai.Client(api_key="AQ.Ab8RN6IlWTiEKExfh6q6rwXj6v0QcArDZtoGoqNT6ocys5zmgQ")
+                    # 自動抓取 Streamlit Secrets 中的金鑰，若無則嘗試從輸入框讀取
+api_key_to_use = ""
+try:
+    if "GEMINI_API_KEY" in st.secrets:
+        api_key_to_use = st.secrets["GEMINI_API_KEY"]
+except Exception:
+    pass
+
+if not api_key_to_use and 'api_key_input' in locals() and api_key_input:
+    api_key_to_use = api_key_input.strip()
+
+# 初始化 Client
+client = genai.Client(api_key=api_key_to_use if api_key_to_use else "AQ.Ab8RN6KhQqjsCwq0J79OMacvXW8k_xmqZQvrHIDDhfW7pi_2ow")
+
 
                     prompt = (
                         "請分析這張冰箱或食材照片，找出主要的食材名稱。"
