@@ -419,13 +419,12 @@ with tab2:
                     )
                     
                     response = client.models.generate_content(
-                        model="gemini-3.8-flash", 
+                        model="gemini-2.5-flash", 
                         contents=[image, prompt]
                     )
                     
                     ai_text = response.text.strip()
                     st.success("🎉 AI 分析成功！")
-                    st.write("AI 回應：", ai_text)
                     
                     for line in ai_text.split("\n"):
                         if "名稱" in line:
@@ -458,7 +457,8 @@ with tab2:
         f_loc = st.selectbox("存放位置", LOCATIONS)
         f_expiry = st.date_input("有效期限", value=date.today() + timedelta(days=14))
         
-        if st.form_submit_button("確認入庫"):
+        submitted = st.form_submit_button("確認入庫")
+        if submitted:
             con = get_db()
             cur = con.cursor()
             cur.execute("""INSERT INTO foods 
@@ -470,9 +470,13 @@ with tab2:
                         (fid, "入庫", f_qty, date.today().isoformat(), "AI 拍照入庫"))
             con.commit()
             con.close()
+            
+            # 成功入庫後重設預設值，避免重複送出
+            st.session_state.ai_name = "雞蛋"
+            st.session_state.ai_qty = 1.0
+            
             st.success(f"成功將 {f_qty:g} {f_unit} 的 {f_name.strip()} 加入！")
             st.rerun()
-
 # --- 標籤三：採買 ---
 with tab3:
     st.subheader(f"🛒 採買清單 ({selected_fridge_name})")
