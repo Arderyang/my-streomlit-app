@@ -420,7 +420,7 @@ with tab2:
                     
                     # 嘗試呼叫模型，若遇到 503 暫時忙碌可自動切換備用模型
                     response = None
-                    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash"]
+                    models_to_try = ["gemini-3.8-flash", "gemini-2.0-flash", "gemini-flash"]
                     
                     for m in models_to_try:
                         try:
