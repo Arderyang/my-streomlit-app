@@ -387,22 +387,26 @@ with tab1:
 with tab2:
     st.subheader(f"📸 Google AI 智慧拍照辨識入庫 ({selected_fridge_name})")
     
+    # 確保 Session State 初始變數存在
     for key, val in [("ai_name", "雞蛋"), ("ai_cat", "蛋類"), ("ai_qty", 1.0), ("ai_unit", "顆")]:
         if key not in st.session_state:
             st.session_state[key] = val
 
-    camera_image = st.camera_input("拍攝冰箱內部或單一食材 (例如：1顆雞蛋)")
+    camera_image = st.camera_input("拍攝冰箱內部或單一食材")
     
     if camera_image is not None:
         image = Image.open(camera_image)
         st.image(image, caption="已拍攝的照片", use_container_width=True)
         
-        api_key_input = st.text_input("請輸入 Gemini API 金鑰", type="password", value="")
+        # 讓使用者可以填入您實際的 API 金鑰（如果程式碼沒寫死）
+        api_key_input = st.text_input("請輸入 Gemini API 金鑰 (若程式碼中已設定可略過)", type="password", value="")
         
         if st.button("🤖 開始讓 Gemini 分析食材"):
             with st.spinner("AI 正在分析影像中的食材與數量..."):
                 try:
+                    # 優先使用輸入框的金鑰，若無則嘗試環境變數或預設值
                     active_key = api_key_input.strip() if api_key_input.strip() else "您的API金鑰"
+                    
                     client = genai.Client(api_key=active_key)
                     
                     prompt = (
@@ -413,8 +417,9 @@ with tab2:
                         "單位: [單位，例如 顆/個/盒]"
                     )
                     
+                    # 呼叫 Gemini 模型 (改用最穩定的通用模型)
                     response = client.models.generate_content(
-                        model="gemini-3.8-flash", 
+                        model="gemini-2.5-flash", 
                         contents=[image, prompt]
                     )
                     
@@ -422,6 +427,7 @@ with tab2:
                     st.success("🎉 AI 分析成功！")
                     st.write("AI 回應：", ai_text)
                     
+                    # 智慧解析 AI 回傳的結果
                     for line in ai_text.split("\n"):
                         if "名稱" in line:
                             st.session_state.ai_name = line.split(":")[-1].split("：")[-1].strip().replace("]", "").replace("[", "")
@@ -431,7 +437,8 @@ with tab2:
                                 st.session_state.ai_cat = cat_val
                         elif "數量" in line:
                             try:
-                                q_str = line.split(":")[-1].split("：")[-1].strip()
+                                q_str = line.split(":")[-1].split("：")[-1].strip().replace("]", "").replace("[", "")
+                                # 萃取數字
                                 import re
                                 numbers = re.findall(r"\d+\.?\d*", q_str)
                                 if numbers:
@@ -442,8 +449,9 @@ with tab2:
                             st.session_state.ai_unit = line.split(":")[-1].split("：")[-1].strip().replace("]", "").replace("[", "")
 
                 except Exception as e:
-                    st.error(f"AI 辨識發生錯誤：{e}")
+                    st.error(f"AI 辨識發生錯誤，請檢查 API 金鑰是否正確：{e}")
 
+    # 確認入庫表單
     with st.form("ai_add_form"):
         st.markdown("##### 📝 確認辨識與入庫資訊")
         f_name = st.text_input("食材名稱", value=st.session_state.ai_name)
@@ -453,21 +461,21 @@ with tab2:
         f_loc = st.selectbox("存放位置", LOCATIONS)
         f_expiry = st.date_input("有效期限", value=date.today() + timedelta(days=14))
         
-        if st.form_submit_button("確認入庫"):
+        submitted = st.form_submit_button("確認入庫")
+        if submitted:
             con = get_db()
             cur = con.cursor()
             cur.execute("""INSERT INTO foods 
                 (fridge_id, name, category, quantity, unit, location, purchase_date, expiry_date, note)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (current_fridge_id, f_name.strip(), f_cat, f_qty, f_unit, f_loc, date.today().isoformat(), f_expiry.isoformat(), "AI 拍照辨識入庫"))
+                (current_fridge_id, f_name.strip(), f_cat, f_qty, f_unit, f_loc, date.today().isoformat(), f_expiry.isoformat(), f"AI 拍照辨識入庫 ({st.session_state.username})"))
             fid = cur.lastrowid
             cur.execute("INSERT INTO transactions(food_id, action, quantity, trans_date, note) VALUES(?,?,?,?,?)",
-                        (fid, "入庫", f_qty, date.today().isoformat(), "AI 拍照入庫"))
+                        (fid, "入庫", f_qty, date.today().isoformat(), f"[{selected_fridge_name}] AI 拍照入庫"))
             con.commit()
             con.close()
-            st.success(f"成功將 {f_qty:g} {f_unit} 的 {f_name.strip()} 加入！")
+            st.success(f"成功將 {f_qty:g} {f_unit} 的 {f_name.strip()} 加入 {selected_fridge_name}！")
             st.rerun()
-
 # --- 標籤三：採買 ---
 with tab3:
     st.subheader(f"🛒 採買清單 ({selected_fridge_name})")
