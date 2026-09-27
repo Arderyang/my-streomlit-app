@@ -348,7 +348,6 @@ with tab1:
     search_query = st.text_input("🔍 搜尋食材名稱/分類/位置", placeholder="輸入關鍵字...")
     con = get_db()
     cur = con.cursor()
-    # 僅查詢數量大於 0 的食材，數量為 0 時自動不顯示在頁面上
     if search_query:
         cur.execute("""SELECT id, name, category, quantity, unit, location, expiry_date 
                        FROM foods WHERE fridge_id = ? AND quantity > 0 AND (name LIKE ? OR category LIKE ? OR location LIKE ?) ORDER BY expiry_date""", 
@@ -425,7 +424,6 @@ with tab2:
                     
                     ai_text = response.text.strip()
                     st.success("🎉 AI 分析成功！")
-                    st.write("AI 回應：", ai_text)
                     
                     for line in ai_text.split("\n"):
                         if "名稱" in line:
@@ -447,7 +445,11 @@ with tab2:
                             st.session_state.ai_unit = line.split(":")[-1].split("：")[-1].strip().replace("]", "").replace("[", "")
 
                 except Exception as e:
-                    st.error(f"AI 辨識發生錯誤：{e}")
+                    err_str = str(e)
+                    if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                        st.error("⚠️ AI 每日免費使用額度已達上限（Free Tier 限制），請明天再試，或至 Google AI Studio 設定付費方案以解鎖額度。")
+                    else:
+                        st.error(f"AI 辨識發生錯誤：{e}")
 
     # 移除 st.form，改用一般輸入元件與按鈕，確保成功訊息能順利顯示並避免重複入庫
     st.markdown("##### 📝 確認辨識與入庫資訊")
@@ -474,11 +476,10 @@ with tab2:
             con.commit()
             con.close()
             
-            # 顯示明確的成功提示訊息，並重設狀態防止重複送出
             st.success(f"✅ 成功將 {f_qty:g} {f_unit} 的 {f_name.strip()} 加入冰箱！")
             st.session_state.ai_name = "雞蛋"
             st.session_state.ai_qty = 1.0
-            
+
 # --- 標籤三：採買 ---
 with tab3:
     st.subheader(f"🛒 採買清單 ({selected_fridge_name})")
