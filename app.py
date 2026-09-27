@@ -320,7 +320,7 @@ with tab1:
         with st.form("manual_add_form"):
             m_name = st.text_input("食材名稱*")
             m_cat = st.selectbox("分類", CATEGORIES)
-            m_qty = st.number_input("數量", min_value=0, value=1.0, step=0.1)
+            m_qty = st.number_input("數量", min_value=0.1, value=1.0, step=0.1)
             m_unit = st.text_input("單位", value="個")
             m_loc = st.selectbox("位置", LOCATIONS)
             m_expiry = st.date_input("有效期限", value=date.today() + timedelta(days=7))
