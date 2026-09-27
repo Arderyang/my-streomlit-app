@@ -399,7 +399,7 @@ with tab2:
         st.image(image, caption="已拍攝的照片", use_container_width=True)
         
         if st.button("🤖 開始讓 Gemini 分析食材"):
-            with st.spinner("AI 正在分析影像中的食材與數量..."):
+            with st.spinner("AI 正在分析影像中的食材與數量，請稍候..."):
                 try:
                     active_key = ""
                     try:
@@ -418,37 +418,50 @@ with tab2:
                         "單位: [單位，例如 顆/個/盒]"
                     )
                     
-                    response = client.models.generate_content(
-                        model="gemini-3.8-flash", 
-                        contents=[image, prompt]
-                    )
+                    # 嘗試呼叫模型，若遇到 503 暫時忙碌可自動切換備用模型
+                    response = None
+                    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash"]
                     
-                    ai_text = response.text.strip()
-                    st.success("🎉 AI 分析成功！")
-                    
-                    for line in ai_text.split("\n"):
-                        if "名稱" in line:
-                            st.session_state.ai_name = line.split(":")[-1].split("：")[-1].strip().replace("]", "").replace("[", "")
-                        elif "分類" in line:
-                            cat_val = line.split(":")[-1].split("：")[-1].strip().replace("]", "").replace("[", "")
-                            if cat_val in CATEGORIES:
-                                st.session_state.ai_cat = cat_val
-                        elif "數量" in line:
-                            try:
-                                q_str = line.split(":")[-1].split("：")[-1].strip()
-                                import re
-                                numbers = re.findall(r"\d+\.?\d*", q_str)
-                                if numbers:
-                                    st.session_state.ai_qty = float(numbers[0])
-                            except Exception:
-                                pass
-                        elif "單位" in line:
-                            st.session_state.ai_unit = line.split(":")[-1].split("：")[-1].strip().replace("]", "").replace("[", "")
+                    for m in models_to_try:
+                        try:
+                            response = client.models.generate_content(
+                                model=m, 
+                                contents=[image, prompt]
+                            )
+                            if response and response.text:
+                                break
+                        except Exception:
+                            continue
+                            
+                    if response and response.text:
+                        ai_text = response.text.strip()
+                        st.success("🎉 AI 分析成功！")
+                        
+                        for line in ai_text.split("\n"):
+                            if "名稱" in line:
+                                st.session_state.ai_name = line.split(":")[-1].split("：")[-1].strip().replace("]", "").replace("[", "")
+                            elif "分類" in line:
+                                cat_val = line.split(":")[-1].split("：")[-1].strip().replace("]", "").replace("[", "")
+                                if cat_val in CATEGORIES:
+                                    st.session_state.ai_cat = cat_val
+                            elif "數量" in line:
+                                try:
+                                    q_str = line.split(":")[-1].split("：")[-1].strip()
+                                    import re
+                                    numbers = re.findall(r"\d+\.?\d*", q_str)
+                                    if numbers:
+                                        st.session_state.ai_qty = float(numbers[0])
+                                except Exception:
+                                    pass
+                            elif "單位" in line:
+                                st.session_state.ai_unit = line.split(":")[-1].split("：")[-1].strip().replace("]", "").replace("[", "")
+                    else:
+                        st.error("目前 AI 伺服器繁忙，請稍候幾秒鐘後再點擊一次按鈕。")
 
                 except Exception as e:
                     st.error(f"AI 辨識發生錯誤：{e}")
 
-    # 改用一般輸入欄位與按鈕（非 st.form），確保成功訊息能完整顯示並防止重複點擊
+    # 確認辨識與入庫資訊表單
     st.markdown("##### 📝 確認辨識與入庫資訊")
     f_name = st.text_input("食材名稱", value=st.session_state.ai_name, key="input_ai_name")
     f_cat = st.selectbox("分類", CATEGORIES, index=CATEGORIES.index(st.session_state.ai_cat) if st.session_state.ai_cat in CATEGORIES else 4, key="input_ai_cat")
@@ -473,12 +486,10 @@ with tab2:
             con.commit()
             con.close()
             
-            # 顯示明確的成功提示訊息
             st.success(f"✅ 成功將 {f_qty:g} {f_unit} 的 {f_name.strip()} 加入冰箱！")
-            
-            # 清空 AI 狀態
             st.session_state.ai_name = "雞蛋"
             st.session_state.ai_qty = 1.0
+            
 # --- 標籤三：採買 ---
 with tab3:
     st.subheader(f"🛒 採買清單 ({selected_fridge_name})")
