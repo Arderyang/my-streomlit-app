@@ -132,12 +132,11 @@ if not st.session_state.logged_in:
             st.sidebar.error("帳號或密碼錯誤！")
     
     st.info("提示：預設管理員帳號為 `admin`，密碼為 `admin123`")
-    st.stop() # 未登入前不顯示後續主要應用
+    st.stop()
 else:
     st.sidebar.write(f"👤 當前使用者：**{st.session_state.username}**")
     st.sidebar.write(f"🛡️ 身份權限：**{'管理員 (Admin)' if st.session_state.role == 'admin' else '一般使用者 (User)'}**")
     
-    # 側邊欄：修改自己的密碼
     with st.sidebar.expander("🔑 修改我的密碼"):
         with st.form("change_password_form"):
             old_p = st.text_input("舊密碼", type="password")
@@ -190,7 +189,7 @@ if st.session_state.role == "admin":
 else:
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📦 庫存", "📸 拍照AI", "🍳 食譜", "🛒 採買", "📋 取出紀錄", "📊 報表"])
 
-# --- 標籤一：庫存管理（含手動新增與清單） ---
+# --- 標籤一：庫存管理（含手動新增與清單、編輯功能） ---
 with tab1:
     st.subheader(f"📦 食材庫存管理 ({selected_fridge_name})")
     
@@ -250,6 +249,7 @@ with tab1:
                 st.write(f"**分類：** {f['category']} | **位置：** {f['location']}")
                 st.write(f"**備註：** {f['note'] or '無'}")
                 
+                # 消耗/取出與刪除操作
                 col1, col2 = st.columns(2)
                 with col1:
                     use_qty = st.number_input("消耗數量", min_value=0.1, max_value=float(f["quantity"]), value=1.0, step=1.0, key=f"use_{f['id']}")
@@ -274,6 +274,38 @@ with tab1:
                         con.commit()
                         con.close()
                         st.success("已刪除該食材！")
+                        st.rerun()
+                
+                st.markdown("---")
+                # 新增：編輯食材屬性表單
+                with st.form(key=f"edit_food_form_{f['id']}"):
+                    st.markdown(f"**✏️ 編輯 {f['name']} 的屬性**")
+                    
+                    # 預設分類與位置索引
+                    curr_cat_idx = CATEGORIES.index(f["category"]) if f["category"] in CATEGORIES else 9
+                    curr_loc_idx = LOCATIONS.index(f["location"]) if f["location"] in LOCATIONS else 0
+                    try:
+                        curr_exp_date = date.fromisoformat(f["expiry_date"])
+                    except Exception:
+                        curr_exp_date = date.today() + timedelta(days=14)
+                    
+                    edit_cat = st.selectbox("修改分類", CATEGORIES, index=curr_cat_idx, key=f"edit_cat_{f['id']}")
+                    edit_loc = st.selectbox("修改存放位置", LOCATIONS, index=curr_loc_idx, key=f"edit_loc_{f['id']}")
+                    edit_expiry = st.date_input("修改有效期限", value=curr_exp_date, key=f"edit_expiry_{f['id']}")
+                    
+                    submit_edit = st.form_submit_button("儲存修改")
+                    if submit_edit:
+                        con = get_db()
+                        cur = con.cursor()
+                        cur.execute("""
+                            UPDATE foods 
+                            SET category = ?, location = ?, expiry_date = ? 
+                            WHERE id = ?
+                        """, (edit_cat, edit_loc, edit_expiry.isoformat(), f["id"]))
+                        con.commit()
+                        con.close()
+                        st.success(f"✅ {f['name']} 的屬性已成功更新！")
+                        time.sleep(0.5)
                         st.rerun()
     else:
         st.info("目前冰箱內沒有食材，您可以透過上方「➕ 手動新增食材」或切換至「📸 拍照AI」加入！")
@@ -546,7 +578,6 @@ with tab4:
                 checked_items = cur.fetchall()
                 if checked_items:
                     for c_id, c_name in checked_items:
-                        # 預設數量 1, 分類「其他」, 位置「冷藏」
                         cur.execute("""INSERT INTO foods 
                             (fridge_id, name, category, quantity, unit, location, purchase_date, expiry_date, note)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -555,7 +586,6 @@ with tab4:
                         cur.execute("INSERT INTO transactions(food_id, action, quantity, trans_date, note) VALUES(?,?,?,?,?)",
                                     (fid, "入庫", 1.0, date.today().isoformat(), "採買購入入庫"))
                     
-                    # 移出已購買的採買清單
                     cur.execute("DELETE FROM shopping_list WHERE checked = 1")
                     con.commit()
                     st.success("🎉 已成功將勾選的採買項目加入冰箱庫存！")
