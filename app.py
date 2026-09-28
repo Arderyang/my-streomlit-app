@@ -199,7 +199,7 @@ if st.session_state.role == "admin":
 else:
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📦 庫存", "📸 拍照AI", "🍳 食譜", "🛒 採買", "📋 取出紀錄", "📊 報表"])
 
-# --- 標籤一：庫存管理（含手動新增與清單、編輯功能、依效期與燈號邏輯） ---
+# --- 標籤一：庫存管理 ---
 with tab1:
     st.subheader(f"📦 食材庫存管理 ({selected_fridge_name})")
     
@@ -245,16 +245,17 @@ with tab1:
     
     if foods:
         st.markdown("##### 現有庫存清單 (依效期排序)")
+        st.caption("燈號備註：常溫、冷凍30天內🔴紅燈、90天內🟠橘燈；冷藏3天內🟠橘燈、過期🔴紅燈")
         for f in foods:
             expiry_date = date.fromisoformat(f["expiry_date"])
             days_left = (expiry_date - date.today()).days
             location = f["location"]
             
-            # 燈號判定邏輯
+            # 更新燈號邏輯：常溫/冷凍 30天內紅燈、90天內橘燈。冷藏 3天內橘燈、過期紅燈
             if location in ["常溫", "冷凍"]:
-                if days_left < 30:
+                if days_left <= 30:
                     status_emoji = "🔴"
-                elif days_left < 180:
+                elif days_left <= 90:
                     status_emoji = "🟠"
                 else:
                     status_emoji = "🟢"
@@ -262,7 +263,7 @@ with tab1:
                 if days_left < 0:
                     status_emoji = "🔴"
                 elif days_left <= 3:
-                    status_emoji = "🟡"
+                    status_emoji = "🟠"
                 else:
                     status_emoji = "🟢"
                 
@@ -693,7 +694,7 @@ with tab5:
     else:
         st.info("目前尚無異動紀錄。")
 
-# --- 標籤六：報表與統計（細分項目依效期排序與燈號） ---
+# --- 標籤六：報表與統計 ---
 with tab6:
     st.subheader(f"📊 冰箱狀態總覽 ({selected_fridge_name})")
     
@@ -712,6 +713,7 @@ with tab6:
     st.divider()
     
     st.markdown("##### 🏷️ 依類別細分統計")
+    st.caption("燈號備註：常溫、冷凍30天內🔴紅燈、90天內🟠橘燈；冷藏3天內🟠橘燈、過期🔴紅燈")
     cur.execute("""
         SELECT category, SUM(quantity), COUNT(*) 
         FROM foods 
@@ -739,9 +741,9 @@ with tab6:
                 loc = s_item['location']
                 
                 if loc in ["常溫", "冷凍"]:
-                    if d_left < 30:
+                    if d_left <= 30:
                         s_emoji = "🔴"
-                    elif d_left < 180:
+                    elif d_left <= 90:
                         s_emoji = "🟠"
                     else:
                         s_emoji = "🟢"
@@ -749,7 +751,7 @@ with tab6:
                     if d_left < 0:
                         s_emoji = "🔴"
                     elif d_left <= 3:
-                        s_emoji = "🟡"
+                        s_emoji = "🟠"
                     else:
                         s_emoji = "🟢"
                 
@@ -760,6 +762,7 @@ with tab6:
     st.divider()
     
     st.markdown("##### 📍 依存放位置細分統計")
+    st.caption("燈號備註：常溫、冷凍30天內🔴紅燈、90天內🟠橘燈；冷藏3天內🟠橘燈、過期🔴紅燈")
     cur.execute("""
         SELECT location, SUM(quantity), COUNT(*) 
         FROM foods 
@@ -786,9 +789,9 @@ with tab6:
                 d_left = (exp_date - date.today()).days
                 
                 if loc_name in ["常溫", "冷凍"]:
-                    if d_left < 30:
+                    if d_left <= 30:
                         s_emoji = "🔴"
-                    elif d_left < 180:
+                    elif d_left <= 90:
                         s_emoji = "🟠"
                     else:
                         s_emoji = "🟢"
@@ -796,7 +799,7 @@ with tab6:
                     if d_left < 0:
                         s_emoji = "🔴"
                     elif d_left <= 3:
-                        s_emoji = "🟡"
+                        s_emoji = "🟠"
                     else:
                         s_emoji = "🟢"
                 
