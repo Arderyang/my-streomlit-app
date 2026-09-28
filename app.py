@@ -277,11 +277,10 @@ with tab1:
                         st.rerun()
                 
                 st.markdown("---")
-                # 新增：編輯食材屬性表單
+                # 編輯食材屬性表單
                 with st.form(key=f"edit_food_form_{f['id']}"):
                     st.markdown(f"**✏️ 編輯 {f['name']} 的屬性**")
                     
-                    # 預設分類與位置索引
                     curr_cat_idx = CATEGORIES.index(f["category"]) if f["category"] in CATEGORIES else 9
                     curr_loc_idx = LOCATIONS.index(f["location"]) if f["location"] in LOCATIONS else 0
                     try:
@@ -440,22 +439,45 @@ with tab3:
         if recipes:
             for r_id, title, ingredients, instructions, category in recipes:
                 import re
-                raw_ings = re.split(r'[,，、\n]+', ingredients)
-                needed_items = [i.strip() for i in raw_ings if i.strip()]
+                raw_lines = [l.strip() for l in ingredients.split('\n') if l.strip()]
+                
+                needed_items = [] # 儲存格式: (name, qty, unit)
+                for line in raw_lines:
+                    parts = re.split(r'[/／,，、]', line)
+                    if len(parts) >= 3:
+                        ing_name = parts[0].strip()
+                        try:
+                            ing_qty = float(parts[1].strip())
+                        except:
+                            ing_qty = 1.0
+                        ing_unit = parts[2].strip()
+                        needed_items.append((ing_name, ing_qty, ing_unit))
+                    elif len(parts) == 2:
+                        ing_name = parts[0].strip()
+                        try:
+                            ing_qty = float(parts[1].strip())
+                            ing_unit = "個"
+                        except:
+                            ing_qty = 1.0
+                            ing_unit = parts[1].strip()
+                        needed_items.append((ing_name, ing_qty, ing_unit))
+                    else:
+                        if line.strip():
+                            needed_items.append((line.strip(), 1.0, "個"))
                 
                 matched_count = 0
-                missing_items = []
+                missing_items = [] # 儲存格式: (name, qty, unit)
                 
-                for ing in needed_items:
+                for ing_name, ing_qty, ing_unit in needed_items:
                     found = False
-                    for f_name, f_qty in fridge_foods.items():
-                        if f_name in ing or ing in f_name:
+                    for f_name in fridge_foods.keys():
+                        if f_name in ing_name or ing_name in f_name:
                             found = True
                             break
                     if found:
                         matched_count += 1
                     else:
-                        missing_items.append(ing)
+                        missing_items.append((ing_name, ing_qty, ing_unit))
                 
                 if not needed_items:
                     status_light = "🟢"
@@ -469,10 +491,27 @@ with tab3:
                 with st.expander(f"{status_light} {title}（分類：{category or '一般'}）"):
                     st.markdown(f"**所需食材：**\n{ingredients}")
                     if missing_items:
-                        st.warning(f"⚠️ 缺少的食材：{', '.join(missing_items)}")
+                        missing_str = ", ".join([f"{name} ({qty:g}{unit})" for name, qty, unit in missing_items])
+                        st.warning(f"⚠️ 缺少的食材：{missing_str}")
+                        
+                        # 按鈕：將缺少的食材依 品名/數量/單位 直接加入冰箱庫存入庫作業
+                        if st.button("📥 將缺少的食材直接入庫", key=f"stock_missing_{r_id}", type="primary"):
+                            for m_name, m_qty, m_unit in missing_items:
+                                cur.execute("""INSERT INTO foods 
+                                    (fridge_id, name, category, quantity, unit, location, purchase_date, expiry_date, note)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                    (current_fridge_id, m_name, "其他", m_qty, m_unit, "冷藏", date.today().isoformat(), (date.today() + timedelta(days=14)).isoformat(), f"食譜「{title}」缺少補齊入庫"))
+                                fid = cur.lastrowid
+                                cur.execute("INSERT INTO transactions(food_id, action, quantity, trans_date, note) VALUES(?,?,?,?,?)",
+                                            (fid, "入庫", m_qty, date.today().isoformat(), f"食譜缺料直接入庫"))
+                            con.commit()
+                            st.success("✅ 已成功將缺少的食材依品名/數量/單位直接加入冰箱庫存！")
+                            time.sleep(1)
+                            st.rerun()
+                            
                         if st.button("🛒 將缺少的食材加入採買清單", key=f"add_missing_shop_{r_id}"):
-                            for m_item in missing_items:
-                                cur.execute("INSERT INTO shopping_list (name) VALUES (?)", (m_item,))
+                            for m_name, _, _ in missing_items:
+                                cur.execute("INSERT INTO shopping_list (name) VALUES (?)", (m_name,))
                             con.commit()
                             st.success("✅ 已成功將缺少的食材加入「採買」分頁中！")
                             time.sleep(0.8)
@@ -494,7 +533,7 @@ with tab3:
         with st.form("add_recipe_form"):
             new_title = st.text_input("食譜名稱")
             new_cat = st.selectbox("料理分類", ["家常菜", "湯品", "點心", "主食", "異國料理", "其他"])
-            new_ing = st.text_area("所需食材（例如：雞蛋、番茄、洋蔥）")
+            new_ing = st.text_area("所需食材（每行一項，例如：\n洋蔥/1/顆\n牛肉/200/克）")
             new_inst = st.text_area("作法步驟說明")
             
             submitted = st.form_submit_button("儲存食譜", type="primary")
@@ -514,8 +553,8 @@ with tab3:
         檔案格式範例：
         ```json
         [
-          {"title": "番茄炒蛋", "ingredients": "番茄、雞蛋", "instructions": "先炒蛋再炒番茄", "category": "家常菜"},
-          {"title": "紫菜蛋花湯", "ingredients": "紫菜、雞蛋", "instructions": "水滾加入紫菜與蛋液", "category": "湯品"}
+          {"title": "番茄炒蛋", "ingredients": "番茄/2/顆\\n雞蛋/3/顆", "instructions": "先炒蛋再炒番茄", "category": "家常菜"},
+          {"title": "紫菜蛋花湯", "ingredients": "紫菜/1/包\\n雞蛋/2/顆", "instructions": "水滾加入紫菜與蛋液", "category": "湯品"}
         ]
         ```
         """)
