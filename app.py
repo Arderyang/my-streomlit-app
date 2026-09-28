@@ -199,7 +199,7 @@ if st.session_state.role == "admin":
 else:
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📦 庫存", "📸 拍照AI", "🍳 食譜", "🛒 採買", "📋 取出紀錄", "📊 報表"])
 
-# --- 標籤一：庫存管理（含手動新增與清單、編輯功能，依效期排序） ---
+# --- 標籤一：庫存管理（含手動新增與清單、編輯功能、依效期與燈號邏輯） ---
 with tab1:
     st.subheader(f"📦 食材庫存管理 ({selected_fridge_name})")
     
@@ -239,7 +239,6 @@ with tab1:
     
     con = get_db()
     cur = con.cursor()
-    # 依有效期限由近到遠排序 (ASC)
     cur.execute("SELECT * FROM foods WHERE fridge_id = ? AND quantity > 0 ORDER BY expiry_date ASC", (current_fridge_id,))
     foods = cur.fetchall()
     con.close()
@@ -249,12 +248,23 @@ with tab1:
         for f in foods:
             expiry_date = date.fromisoformat(f["expiry_date"])
             days_left = (expiry_date - date.today()).days
+            location = f["location"]
             
-            status_emoji = "🟢"
-            if days_left < 0:
-                status_emoji = "🔴"
-            elif days_left <= 3:
-                status_emoji = "🟡"
+            # 燈號判定邏輯
+            if location in ["常溫", "冷凍"]:
+                if days_left < 30:
+                    status_emoji = "🔴"
+                elif days_left < 180:
+                    status_emoji = "🟠"
+                else:
+                    status_emoji = "🟢"
+            else: # 冷藏
+                if days_left < 0:
+                    status_emoji = "🔴"
+                elif days_left <= 3:
+                    status_emoji = "🟡"
+                else:
+                    status_emoji = "🟢"
                 
             with st.expander(f"{status_emoji} {f['name']} ({f['quantity']:g} {f['unit']}) - 到期日: {f['expiry_date']}"):
                 st.write(f"**分類：** {f['category']} | **位置：** {f['location']}")
@@ -683,7 +693,7 @@ with tab5:
     else:
         st.info("目前尚無異動紀錄。")
 
-# --- 標籤六：報表與統計（細分項目依效期排序） ---
+# --- 標籤六：報表與統計（細分項目依效期排序與燈號） ---
 with tab6:
     st.subheader(f"📊 冰箱狀態總覽 ({selected_fridge_name})")
     
@@ -716,16 +726,34 @@ with tab6:
             cat_name = cat or '未分類'
             st.markdown(f"- **{cat_name}**：總共 **{q_sum:g}** 單位（共 {c_cnt} 項品項）")
             
-            # 取得該類別底下的具體食材明細，並依有效期限排序 (ASC)
             cur.execute("""
-                SELECT name, quantity, unit, expiry_date 
+                SELECT name, quantity, unit, location, expiry_date 
                 FROM foods 
                 WHERE fridge_id = ? AND category = ? AND quantity > 0 
                 ORDER BY expiry_date ASC
             """, (current_fridge_id, cat))
             sub_items = cur.fetchall()
             for s_item in sub_items:
-                st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;▪️ `{s_item['name']}`：**{s_item['quantity']:g} {s_item['unit']}** (效期: {s_item['expiry_date']})")
+                exp_date = date.fromisoformat(s_item['expiry_date'])
+                d_left = (exp_date - date.today()).days
+                loc = s_item['location']
+                
+                if loc in ["常溫", "冷凍"]:
+                    if d_left < 30:
+                        s_emoji = "🔴"
+                    elif d_left < 180:
+                        s_emoji = "🟠"
+                    else:
+                        s_emoji = "🟢"
+                else:
+                    if d_left < 0:
+                        s_emoji = "🔴"
+                    elif d_left <= 3:
+                        s_emoji = "🟡"
+                    else:
+                        s_emoji = "🟢"
+                
+                st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;{s_emoji} `{s_item['name']}`：**{s_item['quantity']:g} {s_item['unit']}** ({loc}, 效期: {s_item['expiry_date']})")
     else:
         st.info("目前尚無類別統計資料。")
         
@@ -746,7 +774,6 @@ with tab6:
             loc_name = loc or '未指定'
             st.markdown(f"- **{loc_name}**：總共 **{q_sum:g}** 單位（共 {c_cnt} 項品項）")
             
-            # 取得該位置底下的具體食材明細，並依有效期限排序 (ASC)
             cur.execute("""
                 SELECT name, quantity, unit, category, expiry_date 
                 FROM foods 
@@ -755,7 +782,25 @@ with tab6:
             """, (current_fridge_id, loc))
             sub_loc_items = cur.fetchall()
             for sl_item in sub_loc_items:
-                st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;▪️ `{sl_item['name']}` ({sl_item['category']})：**{sl_item['quantity']:g} {sl_item['unit']}** (效期: {sl_item['expiry_date']})")
+                exp_date = date.fromisoformat(sl_item['expiry_date'])
+                d_left = (exp_date - date.today()).days
+                
+                if loc_name in ["常溫", "冷凍"]:
+                    if d_left < 30:
+                        s_emoji = "🔴"
+                    elif d_left < 180:
+                        s_emoji = "🟠"
+                    else:
+                        s_emoji = "🟢"
+                else:
+                    if d_left < 0:
+                        s_emoji = "🔴"
+                    elif d_left <= 3:
+                        s_emoji = "🟡"
+                    else:
+                        s_emoji = "🟢"
+                
+                st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;{s_emoji} `{sl_item['name']}` ({sl_item['category']})：**{sl_item['quantity']:g} {sl_item['unit']}** (效期: {sl_item['expiry_date']})")
     else:
         st.info("目前尚無位置統計資料。")
         
