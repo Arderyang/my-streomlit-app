@@ -5,7 +5,7 @@ import time
 from google import genai
 import streamlit as st
 
-# --- 1. 資料庫初始化設定 ---
+# --- 1. 資料庫初始化設定與自動升級 ---
 def get_db():
     con = sqlite3.connect("fridge.db")
     con.row_factory = sqlite3.Row
@@ -72,7 +72,7 @@ def init_db():
         )
     """)
     
-    # 採買清單表（擴充數量與單位欄位）
+    # 採買清單表
     cur.execute("""
         CREATE TABLE IF NOT EXISTS shopping_list (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,6 +83,14 @@ def init_db():
         )
     """)
     
+    # 安全檢查：若舊的 shopping_list 表格缺少 quantity 或 unit 欄位，自動補上
+    cur.execute("PRAGMA table_info(shopping_list)")
+    columns = [col["name"] for col in cur.fetchall()]
+    if "quantity" not in columns:
+        cur.execute("ALTER TABLE shopping_list ADD COLUMN quantity REAL DEFAULT 1.0")
+    if "unit" not in columns:
+        cur.execute("ALTER TABLE shopping_list ADD COLUMN unit TEXT DEFAULT '個'")
+
     # 若沒有預設冰箱，建立一個「主冰箱」
     cur.execute("SELECT COUNT(*) FROM fridges")
     if cur.fetchone()[0] == 0:
