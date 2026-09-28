@@ -199,7 +199,7 @@ if st.session_state.role == "admin":
 else:
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📦 庫存", "📸 拍照AI", "🍳 食譜", "🛒 採買", "📋 取出紀錄", "📊 報表"])
 
-# --- 標籤一：庫存管理（含手動新增與清單、編輯功能） ---
+# --- 標籤一：庫存管理（含手動新增與清單、編輯功能，依效期排序） ---
 with tab1:
     st.subheader(f"📦 食材庫存管理 ({selected_fridge_name})")
     
@@ -239,12 +239,13 @@ with tab1:
     
     con = get_db()
     cur = con.cursor()
-    cur.execute("SELECT * FROM foods WHERE fridge_id = ? AND quantity > 0", (current_fridge_id,))
+    # 依有效期限由近到遠排序 (ASC)
+    cur.execute("SELECT * FROM foods WHERE fridge_id = ? AND quantity > 0 ORDER BY expiry_date ASC", (current_fridge_id,))
     foods = cur.fetchall()
     con.close()
     
     if foods:
-        st.markdown("##### 現有庫存清單")
+        st.markdown("##### 現有庫存清單 (依效期排序)")
         for f in foods:
             expiry_date = date.fromisoformat(f["expiry_date"])
             days_left = (expiry_date - date.today()).days
@@ -355,7 +356,7 @@ with tab2:
                 for attempt in range(3):
                     try:
                         response = client.models.generate_content(
-                            model="gemini-3.8-flash", 
+                            model="gemini-2.5-flash", 
                             contents=[image, prompt]
                         )
                         ai_text = response.text.strip()
@@ -682,7 +683,7 @@ with tab5:
     else:
         st.info("目前尚無異動紀錄。")
 
-# --- 標籤六：報表與統計 ---
+# --- 標籤六：報表與統計（細分項目依效期排序） ---
 with tab6:
     st.subheader(f"📊 冰箱狀態總覽 ({selected_fridge_name})")
     
@@ -715,11 +716,12 @@ with tab6:
             cat_name = cat or '未分類'
             st.markdown(f"- **{cat_name}**：總共 **{q_sum:g}** 單位（共 {c_cnt} 項品項）")
             
-            # 取得該類別底下的具體食材明細
+            # 取得該類別底下的具體食材明細，並依有效期限排序 (ASC)
             cur.execute("""
                 SELECT name, quantity, unit, expiry_date 
                 FROM foods 
-                WHERE fridge_id = ? AND category = ? AND quantity > 0
+                WHERE fridge_id = ? AND category = ? AND quantity > 0 
+                ORDER BY expiry_date ASC
             """, (current_fridge_id, cat))
             sub_items = cur.fetchall()
             for s_item in sub_items:
@@ -744,11 +746,12 @@ with tab6:
             loc_name = loc or '未指定'
             st.markdown(f"- **{loc_name}**：總共 **{q_sum:g}** 單位（共 {c_cnt} 項品項）")
             
-            # 取得該位置底下的具體食材明細
+            # 取得該位置底下的具體食材明細，並依有效期限排序 (ASC)
             cur.execute("""
                 SELECT name, quantity, unit, category, expiry_date 
                 FROM foods 
-                WHERE fridge_id = ? AND location = ? AND quantity > 0
+                WHERE fridge_id = ? AND location = ? AND quantity > 0 
+                ORDER BY expiry_date ASC
             """, (current_fridge_id, loc))
             sub_loc_items = cur.fetchall()
             for sl_item in sub_loc_items:
