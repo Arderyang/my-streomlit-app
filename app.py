@@ -388,15 +388,55 @@ with tab3:
     recipe_mode = st.radio("選擇操作模式", ["📜 檢視食譜清單", "✍️ 手動新增食譜", "📥 匯入 JSON 食譜檔案"], horizontal=True)
     
     if recipe_mode == "📜 檢視食譜清單":
-        st.markdown("##### 現有食譜")
+        st.markdown(f"##### 現有食譜庫存狀態檢查 ({selected_fridge_name})")
+        
+        # 取得當前冰箱的所有庫存食材與數量
+        cur.execute("SELECT name, quantity FROM foods WHERE fridge_id = ? AND quantity > 0", (current_fridge_id,))
+        fridge_foods = {row["name"].strip(): row["quantity"] for row in cur.fetchall()}
+        
         cur.execute("SELECT id, title, ingredients, instructions, category FROM recipes")
         recipes = cur.fetchall()
         
         if recipes:
             for r_id, title, ingredients, instructions, category in recipes:
-                with st.expander(f"📖 {title}（分類：{category or '一般'}）"):
+                # 解析食譜所需食材（支援以逗號、頓號或換行分隔）
+                import re
+                raw_ings = re.split(r'[,，、\n]+', ingredients)
+                needed_items = [i.strip() for i in raw_ings if i.strip()]
+                
+                matched_count = 0
+                missing_items = []
+                
+                for ing in needed_items:
+                    # 簡易比對：只要庫存品項名稱包含食譜食材關鍵字，或完全符合
+                    found = False
+                    for f_name, f_qty in fridge_foods.items():
+                        if f_name in ing or ing in f_name:
+                            found = True
+                            break
+                    if found:
+                        matched_count += 1
+                    else:
+                        missing_items.append(ing)
+                
+                # 計算燈號邏輯
+                if not needed_items:
+                    status_light = "🟢"
+                elif matched_count == len(needed_items):
+                    status_light = "🟢"  # 全部符合：亮綠燈
+                elif matched_count == 0:
+                    status_light = "🔴"  # 全部沒有：亮紅燈
+                else:
+                    status_light = "🟠"  # 少部分有：亮橘燈
+                
+                with st.expander(f"{status_light} {title}（分類：{category or '一般'}）"):
                     st.markdown(f"**所需食材：**\n{ingredients}")
+                    if missing_items:
+                        st.warning(f"⚠️ 缺少的食材：{', '.join(missing_items)}")
+                    else:
+                        st.success("🎉 目前冰箱庫存皆已備齊！")
                     st.markdown(f"**作法步驟：**\n{instructions}")
+                    
                     if st.button("🗑️ 刪除此食譜", key=f"del_recipe_{r_id}"):
                         cur.execute("DELETE FROM recipes WHERE id = ?", (r_id,))
                         con.commit()
@@ -410,7 +450,7 @@ with tab3:
         with st.form("add_recipe_form"):
             new_title = st.text_input("食譜名稱")
             new_cat = st.selectbox("料理分類", ["家常菜", "湯品", "點心", "主食", "異國料理", "其他"])
-            new_ing = st.text_area("所需食材（例如：雞蛋 2顆、番茄 1顆）")
+            new_ing = st.text_area("所需食材（例如：雞蛋、番茄、洋蔥）")
             new_inst = st.text_area("作法步驟說明")
             
             submitted = st.form_submit_button("儲存食譜", type="primary")
