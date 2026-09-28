@@ -700,7 +700,7 @@ with tab6:
         
     st.divider()
     
-    st.markdown("##### 🏷️ 依類別統計數量")
+    st.markdown("##### 🏷️ 依類別細分統計")
     cur.execute("""
         SELECT category, SUM(quantity), COUNT(*) 
         FROM foods 
@@ -713,13 +713,23 @@ with tab6:
     if cat_rows:
         for cat, q_sum, c_cnt in cat_rows:
             cat_name = cat or '未分類'
-            st.markdown(f"- **{cat_name}**: 共 **{q_sum:g}** 單位（共 {c_cnt} 項品項）")
+            st.markdown(f"- **{cat_name}**：總共 **{q_sum:g}** 單位（共 {c_cnt} 項品項）")
+            
+            # 取得該類別底下的具體食材明細
+            cur.execute("""
+                SELECT name, quantity, unit, expiry_date 
+                FROM foods 
+                WHERE fridge_id = ? AND category = ? AND quantity > 0
+            """, (current_fridge_id, cat))
+            sub_items = cur.fetchall()
+            for s_item in sub_items:
+                st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;▪️ `{s_item['name']}`：**{s_item['quantity']:g} {s_item['unit']}** (效期: {s_item['expiry_date']})")
     else:
         st.info("目前尚無類別統計資料。")
         
     st.divider()
     
-    st.markdown("##### 📍 依存放位置統計數量")
+    st.markdown("##### 📍 依存放位置細分統計")
     cur.execute("""
         SELECT location, SUM(quantity), COUNT(*) 
         FROM foods 
@@ -732,7 +742,17 @@ with tab6:
     if loc_rows:
         for loc, q_sum, c_cnt in loc_rows:
             loc_name = loc or '未指定'
-            st.markdown(f"- **{loc_name}**: 共 **{q_sum:g}** 單位（共 {c_cnt} 項品項）")
+            st.markdown(f"- **{loc_name}**：總共 **{q_sum:g}** 單位（共 {c_cnt} 項品項）")
+            
+            # 取得該位置底下的具體食材明細
+            cur.execute("""
+                SELECT name, quantity, unit, category, expiry_date 
+                FROM foods 
+                WHERE fridge_id = ? AND location = ? AND quantity > 0
+            """, (current_fridge_id, loc))
+            sub_loc_items = cur.fetchall()
+            for sl_item in sub_loc_items:
+                st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;▪️ `{sl_item['name']}` ({sl_item['category']})：**{sl_item['quantity']:g} {sl_item['unit']}** (效期: {sl_item['expiry_date']})")
     else:
         st.info("目前尚無位置統計資料。")
         
