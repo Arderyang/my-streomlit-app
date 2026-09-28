@@ -72,11 +72,13 @@ def init_db():
         )
     """)
     
-    # 採買清單表
+    # 採買清單表（擴充數量與單位欄位）
     cur.execute("""
         CREATE TABLE IF NOT EXISTS shopping_list (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
+            quantity REAL DEFAULT 1.0,
+            unit TEXT DEFAULT '個',
             checked INTEGER DEFAULT 0
         )
     """)
@@ -249,7 +251,6 @@ with tab1:
                 st.write(f"**分類：** {f['category']} | **位置：** {f['location']}")
                 st.write(f"**備註：** {f['note'] or '無'}")
                 
-                # 消耗/取出與刪除操作
                 col1, col2 = st.columns(2)
                 with col1:
                     use_qty = st.number_input("消耗數量", min_value=0.1, max_value=float(f["quantity"]), value=1.0, step=1.0, key=f"use_{f['id']}")
@@ -277,7 +278,6 @@ with tab1:
                         st.rerun()
                 
                 st.markdown("---")
-                # 編輯食材屬性表單
                 with st.form(key=f"edit_food_form_{f['id']}"):
                     st.markdown(f"**✏️ 編輯 {f['name']} 的屬性**")
                     
@@ -441,7 +441,7 @@ with tab3:
                 import re
                 raw_lines = [l.strip() for l in ingredients.split('\n') if l.strip()]
                 
-                needed_items = [] # 儲存格式: (name, qty, unit)
+                needed_items = []
                 for line in raw_lines:
                     parts = re.split(r'[/／,，、]', line)
                     if len(parts) >= 3:
@@ -466,7 +466,7 @@ with tab3:
                             needed_items.append((line.strip(), 1.0, "個"))
                 
                 matched_count = 0
-                missing_items = [] # 儲存格式: (name, qty, unit)
+                missing_items = []
                 
                 for ing_name, ing_qty, ing_unit in needed_items:
                     found = False
@@ -494,7 +494,6 @@ with tab3:
                         missing_str = ", ".join([f"{name} ({qty:g}{unit})" for name, qty, unit in missing_items])
                         st.warning(f"⚠️ 缺少的食材：{missing_str}")
                         
-                        # 按鈕：將缺少的食材依 品名/數量/單位 直接加入冰箱庫存入庫作業
                         if st.button("📥 將缺少的食材直接入庫", key=f"stock_missing_{r_id}", type="primary"):
                             for m_name, m_qty, m_unit in missing_items:
                                 cur.execute("""INSERT INTO foods 
@@ -510,8 +509,8 @@ with tab3:
                             st.rerun()
                             
                         if st.button("🛒 將缺少的食材加入採買清單", key=f"add_missing_shop_{r_id}"):
-                            for m_name, _, _ in missing_items:
-                                cur.execute("INSERT INTO shopping_list (name) VALUES (?)", (m_name,))
+                            for m_name, m_qty, m_unit in missing_items:
+                                cur.execute("INSERT INTO shopping_list (name, quantity, unit) VALUES (?, ?, ?)", (m_name, m_qty, m_unit))
                             con.commit()
                             st.success("✅ 已成功將缺少的食材加入「採買」分頁中！")
                             time.sleep(0.8)
@@ -533,7 +532,7 @@ with tab3:
         with st.form("add_recipe_form"):
             new_title = st.text_input("食譜名稱")
             new_cat = st.selectbox("料理分類", ["家常菜", "湯品", "點心", "主食", "異國料理", "其他"])
-            new_ing = st.text_area("所需食材（每行一項，例如：\n洋蔥/1/顆\n牛肉/200/克）")
+            new_ing = st.text_area("所需食材（每行一項，格式：品名/數量/單位，例如：\n洋蔥/1/顆\n牛肉/200/克）")
             new_inst = st.text_area("作法步驟說明")
             
             submitted = st.form_submit_button("儲存食譜", type="primary")
@@ -553,8 +552,7 @@ with tab3:
         檔案格式範例：
         ```json
         [
-          {"title": "番茄炒蛋", "ingredients": "番茄/2/顆\\n雞蛋/3/顆", "instructions": "先炒蛋再炒番茄", "category": "家常菜"},
-          {"title": "紫菜蛋花湯", "ingredients": "紫菜/1/包\\n雞蛋/2/顆", "instructions": "水滾加入紫菜與蛋液", "category": "湯品"}
+          {"title": "番茄炒蛋", "ingredients": "番茄/2/顆\\n雞蛋/3/顆", "instructions": "先炒蛋再炒番茄", "category": "家常菜"}
         ]
         ```
         """)
@@ -587,25 +585,38 @@ with tab3:
 # --- 標籤四：採買清單 ---
 with tab4:
     st.subheader(f"🛒 採買清單 ({selected_fridge_name})")
-    st.info("勾選已購買的項目後，可直接點擊下方按鈕將其快速加入當前冰箱庫存！")
+    st.info("您可以手動新增採買項目（包含數量與單位），勾選已購買的項目後可一鍵快速加入當前冰箱庫存！")
     
     con = get_db()
     cur = con.cursor()
     
-    new_shop = st.text_input("手動新增欲採買食材")
-    if st.button("加入採買清單"):
-        if new_shop.strip():
-            cur.execute("INSERT INTO shopping_list (name) VALUES (?)", (new_shop.strip(),))
-            con.commit()
-            st.success(f"已加入：{new_shop.strip()}")
-            st.rerun()
+    with st.form("add_shop_form"):
+        col_s1, col_s2, col_s3 = st.columns([2, 1, 1])
+        with col_s1:
+            shop_name = st.text_input("食材名稱", placeholder="例如：蘋果")
+        with col_s2:
+            shop_qty = st.number_input("數量", min_value=0.1, value=1.0, step=1.0)
+        with col_s3:
+            shop_unit = st.text_input("單位", value="個")
             
-    cur.execute("SELECT id, name, checked FROM shopping_list")
+        shop_submitted = st.form_submit_button("加入採買清單", type="primary")
+        if shop_submitted:
+            if shop_name.strip():
+                cur.execute("INSERT INTO shopping_list (name, quantity, unit) VALUES (?, ?, ?)", 
+                            (shop_name.strip(), shop_qty, shop_unit.strip() or "個"))
+                con.commit()
+                st.success(f"已加入採買：{shop_name.strip()} {shop_qty:g} {shop_unit}")
+                st.rerun()
+            else:
+                st.warning("請輸入食材名稱！")
+            
+    st.divider()
+    cur.execute("SELECT id, name, quantity, unit, checked FROM shopping_list")
     shop_items = cur.fetchall()
     
     if shop_items:
-        for s_id, s_name, checked in shop_items:
-            is_checked = st.checkbox(s_name, value=bool(checked), key=f"shop_{s_id}")
+        for s_id, s_name, s_qty, s_unit, checked in shop_items:
+            is_checked = st.checkbox(f"{s_name} — {s_qty:g} {s_unit}", value=bool(checked), key=f"shop_{s_id}")
             if is_checked != bool(checked):
                 cur.execute("UPDATE shopping_list SET checked = ? WHERE id = ?", (int(is_checked), s_id))
                 con.commit()
@@ -613,21 +624,21 @@ with tab4:
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
             if st.button("📥 將已勾選項目加入冰箱庫存", type="primary"):
-                cur.execute("SELECT id, name FROM shopping_list WHERE checked = 1")
+                cur.execute("SELECT id, name, quantity, unit FROM shopping_list WHERE checked = 1")
                 checked_items = cur.fetchall()
                 if checked_items:
-                    for c_id, c_name in checked_items:
+                    for c_id, c_name, c_qty, c_unit in checked_items:
                         cur.execute("""INSERT INTO foods 
                             (fridge_id, name, category, quantity, unit, location, purchase_date, expiry_date, note)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                            (current_fridge_id, c_name, "其他", 1.0, "個", "冷藏", date.today().isoformat(), (date.today() + timedelta(days=14)).isoformat(), "採買清單購入"))
+                            (current_fridge_id, c_name, "其他", c_qty, c_unit, "冷藏", date.today().isoformat(), (date.today() + timedelta(days=14)).isoformat(), "採買清單購入"))
                         fid = cur.lastrowid
                         cur.execute("INSERT INTO transactions(food_id, action, quantity, trans_date, note) VALUES(?,?,?,?,?)",
-                                    (fid, "入庫", 1.0, date.today().isoformat(), "採買購入入庫"))
+                                    (fid, "入庫", c_qty, date.today().isoformat(), "採買購入入庫"))
                     
                     cur.execute("DELETE FROM shopping_list WHERE checked = 1")
                     con.commit()
-                    st.success("🎉 已成功將勾選的採買項目加入冰箱庫存！")
+                    st.success("🎉 已成功將勾選的採買項目依品名/數量/單位加入冰箱庫存！")
                     time.sleep(1)
                     st.rerun()
                 else:
