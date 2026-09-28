@@ -387,9 +387,15 @@ with tab1:
 with tab2:
     st.subheader(f"📸 Google AI 智慧拍照辨識入庫 ({selected_fridge_name})")
     
-    for key, val in [("ai_name", ""), ("ai_cat", "其他"), ("ai_qty", 1.0), ("ai_unit", "個")]:
-        if key not in st.session_state:
-            st.session_state[key] = val
+    # 初始化 Session State
+    if "ai_result_name" not in st.session_state:
+        st.session_state.ai_result_name = ""
+    if "ai_result_cat" not in st.session_state:
+        st.session_state.ai_result_cat = "其他"
+    if "ai_result_qty" not in st.session_state:
+        st.session_state.ai_result_qty = 1.0
+    if "ai_result_unit" not in st.session_state:
+        st.session_state.ai_result_unit = "個"
 
     camera_image = st.camera_input("拍攝冰箱內部或單一食材")
     
@@ -413,7 +419,6 @@ with tab2:
                 
                 success = False
                 ai_text = ""
-                # 自動重試機制（最多試 3 次，應對 503 忙碌）
                 for attempt in range(3):
                     try:
                         response = client.models.generate_content(
@@ -425,51 +430,56 @@ with tab2:
                         break
                     except Exception as e:
                         if "503" in str(e) and attempt < 2:
-                            time.sleep(2) # 等待 2 秒後重試
+                            time.sleep(2)
                             continue
                         else:
                             st.error(f"AI 辨識發生錯誤：{e}")
                             break
                 
                 if success and ai_text:
-                    st.success("🎉 AI 分析成功！")
                     parsed_any = False
                     for line in ai_text.split("\n"):
                         if "名稱" in line:
                             val = line.split(":")[-1].split("：")[-1].strip().replace("]", "").replace("[", "")
                             if val:
-                                st.session_state.ai_name = val
+                                st.session_state.ai_result_name = val
                                 parsed_any = True
                         elif "分類" in line:
                             cat_val = line.split(":")[-1].split("：")[-1].strip().replace("]", "").replace("[", "")
                             if cat_val in CATEGORIES:
-                                st.session_state.ai_cat = cat_val
+                                st.session_state.ai_result_cat = cat_val
                         elif "數量" in line:
                             try:
                                 q_str = line.split(":")[-1].split("：")[-1].strip()
                                 import re
                                 numbers = re.findall(r"\d+\.?\d*", q_str)
                                 if numbers:
-                                    st.session_state.ai_qty = float(numbers[0])
+                                    st.session_state.ai_result_qty = float(numbers[0])
                             except Exception:
                                 pass
                         elif "單位" in line:
                             u_val = line.split(":")[-1].split("：")[-1].strip().replace("]", "").replace("[", "")
                             if u_val:
-                                st.session_state.ai_unit = u_val
+                                st.session_state.ai_result_unit = u_val
                     
-                    if not parsed_any:
-                        st.warning(f"AI 回傳格式無法解析，原始回應為：\n{ai_text}")
-                    else:
+                    if parsed_any:
+                        st.success("🎉 AI 分析成功！")
                         st.rerun()
+                    else:
+                        st.warning(f"AI 回傳內容無法正確解析，原始回應為：\n{ai_text}")
 
     st.markdown("##### 📝 確認辨識與入庫資訊")
-    f_name = st.text_input("食材名稱", value=st.session_state.ai_name, key="input_ai_name")
-    f_cat = st.selectbox("分類", CATEGORIES, index=CATEGORIES.index(st.session_state.ai_cat) if st.session_state.ai_cat in CATEGORIES else 9, key="input_ai_cat")
-    f_qty = st.number_input("數量", min_value=0.1, value=float(st.session_state.ai_qty), step=1.0, key="input_ai_qty")
-    f_unit = st.text_input("單位", value=st.session_state.ai_unit, key="input_ai_unit")
-    f_loc = st.selectbox("存放位置", LOCATIONS, key="input_ai_loc")
-    f_expiry = st.date_input("有效期限", value=date.today() + timedelta(days=14), key="input_ai_expiry")
+    
+    # 不使用 key 綁定，改用變數直接帶入 value，避免被清空
+    f_name = st.text_input("食材名稱", value=st.session_state.ai_result_name)
+    
+    default_cat_idx = CATEGORIES.index(st.session_state.ai_result_cat) if st.session_state.ai_result_cat in CATEGORIES else 9
+    f_cat = st.selectbox("分類", CATEGORIES, index=default_cat_idx)
+    
+    f_qty = st.number_input("數量", min_value=0.1, value=float(st.session_state.ai_result_qty), step=1.0)
+    f_unit = st.text_input("單位", value=st.session_state.ai_result_unit)
+    f_loc = st.selectbox("存放位置", LOCATIONS)
+    f_expiry = st.date_input("有效期限", value=date.today() + timedelta(days=14))
     
     if st.button("確認入庫", type="primary", key="btn_ai_submit"):
         if not f_name.strip():
