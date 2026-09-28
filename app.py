@@ -94,9 +94,44 @@ current_fridge_id = fridge_dict[selected_fridge_name]
 # --- 3. 標籤頁導覽 ---
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📦 庫存", "📸 拍照AI", "🍳 食譜", "🛒 採買", "📋 取出紀錄", "📊 報表"])
 
-# --- 標籤一：庫存管理 ---
+# --- 標籤一：庫存管理（含手動新增與清單） ---
 with tab1:
     st.subheader(f"📦 食材庫存管理 ({selected_fridge_name})")
+    
+    # 手動新增食材區塊
+    with st.expander("➕ 手動新增食材"):
+        with st.form("manual_add_food_form"):
+            m_name = st.text_input("食材名稱")
+            m_cat = st.selectbox("分類", CATEGORIES, key="m_cat")
+            col_q1, col_q2 = st.columns(2)
+            with col_q1:
+                m_qty = st.number_input("數量", min_value=0.1, value=1.0, step=1.0, key="m_qty")
+            with col_q2:
+                m_unit = st.text_input("單位（如：個、克、瓶）", value="個", key="m_unit")
+            m_loc = st.selectbox("存放位置", LOCATIONS, key="m_loc")
+            m_expiry = st.date_input("有效期限", value=date.today() + timedelta(days=14), key="m_expiry")
+            m_note = st.text_input("備註說明", key="m_note")
+            
+            m_submitted = st.form_submit_button("確認新增入庫", type="primary")
+            if m_submitted:
+                if not m_name.strip():
+                    st.warning("請輸入食材名稱！")
+                else:
+                    con = get_db()
+                    cur = con.cursor()
+                    cur.execute("""INSERT INTO foods 
+                        (fridge_id, name, category, quantity, unit, location, purchase_date, expiry_date, note)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (current_fridge_id, m_name.strip(), m_cat, m_qty, m_unit, m_loc, date.today().isoformat(), m_expiry.isoformat(), m_note.strip() or "手動新增"))
+                    fid = cur.lastrowid
+                    cur.execute("INSERT INTO transactions(food_id, action, quantity, trans_date, note) VALUES(?,?,?,?,?)",
+                                (fid, "入庫", m_qty, date.today().isoformat(), "手動新增入庫"))
+                    con.commit()
+                    con.close()
+                    st.success(f"✅ 成功手動新增 {m_qty:g} {m_unit} 的 {m_name.strip()}！")
+                    st.rerun()
+
+    st.divider()
     
     con = get_db()
     cur = con.cursor()
@@ -105,6 +140,7 @@ with tab1:
     con.close()
     
     if foods:
+        st.markdown("##### 現有庫存清單")
         for f in foods:
             expiry_date = date.fromisoformat(f["expiry_date"])
             days_left = (expiry_date - date.today()).days
@@ -145,7 +181,7 @@ with tab1:
                         st.success("已刪除該食材！")
                         st.rerun()
     else:
-        st.info("目前冰箱內沒有食材，快使用「拍照AI」或手動新增吧！")
+        st.info("目前冰箱內沒有食材，您可以透過上方「➕ 手動新增食材」或切換至「📸 拍照AI」加入！")
 
 # --- 標籤二：手機拍照與 Google Gemini AI 辨識入庫 ---
 with tab2:
