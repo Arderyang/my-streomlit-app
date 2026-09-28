@@ -606,16 +606,16 @@ with tab3:
                     st.rerun()
                     
     elif recipe_mode == "📥 匯入 JSON 食譜檔案":
-        st.markdown("##### 📁 上傳 JSON 格式食譜檔案")
-        st.markdown(
-            "檔案格式範例：\n"
-            "```json\n"
-            "[\n"
-            '  {"title": "番茄炒蛋", "ingredients": "番茄、雞蛋", "instructions": "先炒蛋再炒番茄", "category": "家常菜"},\n"
-            '  {"title": "紫菜蛋花湯", "ingredients": "紫菜、雞蛋", "instructions": "水滾加入紫菜與蛋液", "category": "湯品"}\n'
-            "]\n"
-            "```"
-        )
+        st.markdown("""
+        ##### 📁 上傳 JSON 格式食譜檔案
+        檔案格式範例：
+        ```json
+        [
+          {"title": "番茄炒蛋", "ingredients": "番茄、雞蛋", "instructions": "先炒蛋再炒番茄", "category": "家常菜"},
+          {"title": "紫菜蛋花湯", "ingredients": "紫菜、雞蛋", "instructions": "水滾加入紫菜與蛋液", "category": "湯品"}
+        ]
+        ```
+        """)
         
         uploaded_file = st.file_uploader("選擇 JSON 檔案", type=["json"])
         if uploaded_file is not None:
