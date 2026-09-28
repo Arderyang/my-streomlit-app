@@ -547,42 +547,101 @@ with tab3:
                         con.close()
                         st.rerun()
 
-# --- 標籤四：食譜 ---
-with tab4:
-    st.subheader("🍳 食譜清單與冰箱食材比對")
+# --- 標籤三：食譜管理與匯入 ---
+with tab3:
+    st.subheader("🍳 食譜管理與智慧推薦")
+    
+    # 確保資料庫中存在 recipes 資料表
     con = get_db()
     cur = con.cursor()
-    cur.execute("SELECT name, quantity FROM foods WHERE fridge_id = ? AND quantity > 0", (current_fridge_id,))
-    fridge_foods = {row[0].strip(): row[1] for row in cur.fetchall()}
-    cur.execute("SELECT id, name, category, ingredients, instructions FROM recipes ORDER BY id DESC")
-    recipes = cur.fetchall()
-    con.close()
-
-    if recipes:
-        for rid, rname, rcat, ringredients, rinstructions in recipes:
-            missing_items = []
-            has_all = True
-            for item in ringredients.split(","):
-                if ":" in item:
-                    iname = item.split(":")[0].strip()
-                    found_match = any(iname == fname or (len(iname) >= 2 and iname in fname) for fname in fridge_foods.keys())
-                    if not found_match:
-                        has_all = False
-                        missing_items.append(iname)
-            badge = "🟢 材料齊全可烹調" if has_all else f"🟠 缺少材料 ({len(missing_items)}樣)"
-            with st.expander(f"{badge} | {rname} ({rcat or '未分類'})"):
-                st.markdown(f"**所需食材**：`{ringredients}`")
-                st.markdown(f"**烹調步驟**：\n{rinstructions or '無步驟說明'}")
-                if not has_all and st.button("🛒 將缺少的食材加入採買", key=f"m_{rid}"):
-                    con = get_db()
-                    for m_item in missing_items:
-                        con.execute("INSERT INTO shopping_list(fridge_id, name, quantity, unit, location, expiry_date) VALUES(?,?,?,?,?,?)",
-                                    (current_fridge_id, m_item, 1, "個", "冷藏", (date.today() + timedelta(days=7)).isoformat()))
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS recipes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            ingredients TEXT,
+            instructions TEXT,
+            category TEXT
+        )
+    """)
+    con.commit()
+    
+    # 子選項切換：檢視、新增、匯入
+    recipe_mode = st.radio("選擇操作模式", ["📜 檢視食譜清單", "✍️ 手動新增食譜", "📥 匯入 JSON 食譜檔案"], horizontal=True)
+    
+    if recipe_mode == "📜 檢視食譜清單":
+        st.markdown("##### 現有食譜")
+        cur.execute("SELECT id, title, ingredients, instructions, category FROM recipes")
+        recipes = cur.fetchall()
+        
+        if recipes:
+            for r_id, title, ingredients, instructions, category in recipes:
+                with st.expander(f"📖 {title}（分類：{category or '一般'}）"):
+                    st.markdown(f"**所需食材：**\n{ingredients}")
+                    st.markdown(f"**作法步驟：**\n{instructions}")
+                    if st.button("🗑️ 刪除此食譜", key=f"del_recipe_{r_id}"):
+                        cur.execute("DELETE FROM recipes WHERE id = ?", (r_id,))
+                        con.commit()
+                        st.success("已成功刪除食譜！")
+                        st.rerun()
+        else:
+            st.info("目前尚無食譜，請切換至「手動新增食譜」或「匯入 JSON 食譜檔案」加入！")
+            
+    elif recipe_mode == "✍️ 手動新增食譜":
+        st.markdown("##### 📝 填寫新食譜資訊")
+        with st.form("add_recipe_form"):
+            new_title = st.text_input("食譜名稱")
+            new_cat = st.selectbox("料理分類", ["家常菜", "湯品", "點心", "主食", "異國料理", "其他"])
+            new_ing = st.text_area("所需食材（例如：雞蛋 2顆、番茄 1顆）")
+            new_inst = st.text_area("作法步驟說明")
+            
+            submitted = st.form_submit_button("儲存食譜", type="primary")
+            if submitted:
+                if not new_title.strip():
+                    st.warning("請輸入食譜名稱！")
+                else:
+                    cur.execute("INSERT INTO recipes (title, ingredients, instructions, category) VALUES (?, ?, ?, ?)",
+                                (new_title.strip(), new_ing, new_inst, new_cat))
                     con.commit()
-                    con.close()
-                    st.success("已加入採買清單！")
+                    st.success(f"✅ 成功新增食譜：{new_title.strip()}！")
                     st.rerun()
-
+                    
+    elif recipe_mode == "📥 匯入 JSON 食譜檔案":
+        st.markdown("##### 📁 上傳 JSON 格式食譜檔案")
+        st.markdown(
+            "檔案格式範例：\n"
+            "```json\n"
+            "[\n"
+            '  {"title": "番茄炒蛋", "ingredients": "番茄、雞蛋", "instructions": "先炒蛋再炒番茄", "category": "家常菜"},\n"
+            '  {"title": "紫菜蛋花湯", "ingredients": "紫菜、雞蛋", "instructions": "水滾加入紫菜與蛋液", "category": "湯品"}\n'
+            "]\n"
+            "```"
+        )
+        
+        uploaded_file = st.file_uploader("選擇 JSON 檔案", type=["json"])
+        if uploaded_file is not None:
+            import json
+            try:
+                data = json.load(uploaded_file)
+                if isinstance(data, list):
+                    count_imported = 0
+                    for item in data:
+                        title = item.get("title")
+                        ingredients = item.get("ingredients", "")
+                        instructions = item.get("instructions", "")
+                        category = item.get("category", "其他")
+                        if title:
+                            cur.execute("INSERT INTO recipes (title, ingredients, instructions, category) VALUES (?, ?, ?, ?)",
+                                        (title, ingredients, instructions, category))
+                            count_imported += 1
+                    con.commit()
+                    st.success(f"🎉 成功批次匯入 {count_imported} 筆食譜！")
+                    st.rerun()
+                else:
+                    st.error("JSON 格式不正確，最外層必須是陣列格式（List）。")
+            except Exception as e:
+                st.error(f"解析檔案時發生錯誤：{e}")
+                
+    con.close()
 # --- 標籤五：紀錄 ---
 with tab5:
     st.subheader(f"📜 異動紀錄 ({selected_fridge_name})")
