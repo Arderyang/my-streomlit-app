@@ -72,6 +72,15 @@ def init_db():
         )
     """)
     
+    # 採買清單表
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS shopping_list (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            checked INTEGER DEFAULT 0
+        )
+    """)
+    
     # 若沒有預設冰箱，建立一個「主冰箱」
     cur.execute("SELECT COUNT(*) FROM fridges")
     if cur.fetchone()[0] == 0:
@@ -390,7 +399,6 @@ with tab3:
     if recipe_mode == "📜 檢視食譜清單":
         st.markdown(f"##### 現有食譜庫存狀態檢查 ({selected_fridge_name})")
         
-        # 取得當前冰箱的所有庫存食材與數量
         cur.execute("SELECT name, quantity FROM foods WHERE fridge_id = ? AND quantity > 0", (current_fridge_id,))
         fridge_foods = {row["name"].strip(): row["quantity"] for row in cur.fetchall()}
         
@@ -399,7 +407,6 @@ with tab3:
         
         if recipes:
             for r_id, title, ingredients, instructions, category in recipes:
-                # 解析食譜所需食材（支援以逗號、頓號或換行分隔）
                 import re
                 raw_ings = re.split(r'[,，、\n]+', ingredients)
                 needed_items = [i.strip() for i in raw_ings if i.strip()]
@@ -408,7 +415,6 @@ with tab3:
                 missing_items = []
                 
                 for ing in needed_items:
-                    # 簡易比對：只要庫存品項名稱包含食譜食材關鍵字，或完全符合
                     found = False
                     for f_name, f_qty in fridge_foods.items():
                         if f_name in ing or ing in f_name:
@@ -419,20 +425,26 @@ with tab3:
                     else:
                         missing_items.append(ing)
                 
-                # 計算燈號邏輯
                 if not needed_items:
                     status_light = "🟢"
                 elif matched_count == len(needed_items):
-                    status_light = "🟢"  # 全部符合：亮綠燈
+                    status_light = "🟢"
                 elif matched_count == 0:
-                    status_light = "🔴"  # 全部沒有：亮紅燈
+                    status_light = "🔴"
                 else:
-                    status_light = "🟠"  # 少部分有：亮橘燈
+                    status_light = "🟠"
                 
                 with st.expander(f"{status_light} {title}（分類：{category or '一般'}）"):
                     st.markdown(f"**所需食材：**\n{ingredients}")
                     if missing_items:
                         st.warning(f"⚠️ 缺少的食材：{', '.join(missing_items)}")
+                        if st.button("🛒 將缺少的食材加入採買清單", key=f"add_missing_shop_{r_id}"):
+                            for m_item in missing_items:
+                                cur.execute("INSERT INTO shopping_list (name) VALUES (?)", (m_item,))
+                            con.commit()
+                            st.success("✅ 已成功將缺少的食材加入「採買」分頁中！")
+                            time.sleep(0.8)
+                            st.rerun()
                     else:
                         st.success("🎉 目前冰箱庫存皆已備齊！")
                     st.markdown(f"**作法步驟：**\n{instructions}")
@@ -503,21 +515,13 @@ with tab3:
 
 # --- 標籤四：採買清單 ---
 with tab4:
-    st.subheader("🛒 採買清單")
-    st.info("這裡可以記錄您需要購買的食材清單。")
+    st.subheader(f"🛒 採買清單 ({selected_fridge_name})")
+    st.info("勾選已購買的項目後，可直接點擊下方按鈕將其快速加入當前冰箱庫存！")
     
     con = get_db()
     cur = con.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS shopping_list (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            checked INTEGER DEFAULT 0
-        )
-    """)
-    con.commit()
     
-    new_shop = st.text_input("新增欲採買食材")
+    new_shop = st.text_input("手動新增欲採買食材")
     if st.button("加入採買清單"):
         if new_shop.strip():
             cur.execute("INSERT INTO shopping_list (name) VALUES (?)", (new_shop.strip(),))
@@ -535,11 +539,38 @@ with tab4:
                 cur.execute("UPDATE shopping_list SET checked = ? WHERE id = ?", (int(is_checked), s_id))
                 con.commit()
         
-        if st.button("清除已勾選項目"):
-            cur.execute("DELETE FROM shopping_list WHERE checked = 1")
-            con.commit()
-            st.success("已清除勾選項目！")
-            st.rerun()
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            if st.button("📥 將已勾選項目加入冰箱庫存", type="primary"):
+                cur.execute("SELECT id, name FROM shopping_list WHERE checked = 1")
+                checked_items = cur.fetchall()
+                if checked_items:
+                    for c_id, c_name in checked_items:
+                        # 預設數量 1, 分類「其他」, 位置「冷藏」
+                        cur.execute("""INSERT INTO foods 
+                            (fridge_id, name, category, quantity, unit, location, purchase_date, expiry_date, note)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (current_fridge_id, c_name, "其他", 1.0, "個", "冷藏", date.today().isoformat(), (date.today() + timedelta(days=14)).isoformat(), "採買清單購入"))
+                        fid = cur.lastrowid
+                        cur.execute("INSERT INTO transactions(food_id, action, quantity, trans_date, note) VALUES(?,?,?,?,?)",
+                                    (fid, "入庫", 1.0, date.today().isoformat(), "採買購入入庫"))
+                    
+                    # 移出已購買的採買清單
+                    cur.execute("DELETE FROM shopping_list WHERE checked = 1")
+                    con.commit()
+                    st.success("🎉 已成功將勾選的採買項目加入冰箱庫存！")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.warning("您尚未勾選任何已購買的項目！")
+        with col_btn2:
+            if st.button("🗑️ 清除已勾選項目"):
+                cur.execute("DELETE FROM shopping_list WHERE checked = 1")
+                con.commit()
+                st.success("已清除勾選項目！")
+                st.rerun()
+    else:
+        st.info("目前採買清單是空的。")
     con.close()
 
 # --- 標籤五：取出紀錄 ---
@@ -659,12 +690,10 @@ if st.session_state.role == "admin":
                     with col_f1:
                         st.write(f"**冰箱名稱：** {f_name} (ID: {f_id})")
                     with col_f2:
-                        # 至少保留一個冰箱，避免系統完全沒有冰箱
                         if len(all_fridges) > 1:
                             if st.button("🗑️ 刪除", key=f"del_fridge_{f_id}"):
                                 con = get_db()
                                 cur = con.cursor()
-                                # 同時清除該冰箱底下的所有食材
                                 cur.execute("DELETE FROM foods WHERE fridge_id = ?", (f_id,))
                                 cur.execute("DELETE FROM fridges WHERE id = ?", (f_id,))
                                 con.commit()
@@ -716,7 +745,6 @@ if st.session_state.role == "admin":
                     with col_u2:
                         st.write(f"**權限：** {u_role}")
                     with col_u3:
-                        # 不允許刪除自己或預設的 admin 帳號（避免系統失控）
                         if u_name != "admin" and u_name != st.session_state.username:
                             if st.button("🗑️ 刪除", key=f"del_user_{u_id}"):
                                 con = get_db()
