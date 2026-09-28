@@ -596,15 +596,61 @@ with tab5:
         for tid, fname, action, tqty, tdate, tnote in trans_rows:
             st.markdown(f"**[{tdate}] {fname}** - `{action}` ({tqty:g}) | {tnote}")
 
-# --- 標籤六：報表 ---
+# --- 標籤六：報表與統計 ---
 with tab6:
     st.subheader(f"📊 冰箱狀態總覽 ({selected_fridge_name})")
+    
     con = get_db()
     cur = con.cursor()
+    
+    # 總計數據
     cur.execute("SELECT COUNT(*), COALESCE(SUM(quantity),0) FROM foods WHERE fridge_id = ? AND quantity > 0", (current_fridge_id,))
     count, total = cur.fetchone()
-    cur.execute("SELECT name, quantity, unit, expiry_date FROM foods WHERE fridge_id = ? AND quantity > 0 AND expiry_date<>'' AND expiry_date IS NOT NULL ORDER BY expiry_date", (current_fridge_id,))
-    all_foods = cur.fetchall()
+    
+    col_m1, col_m2 = st.columns(2)
+    with col_m1:
+        st.metric("總食材品項數", f"{count} 項")
+    with col_m2:
+        st.metric("總庫存數量", f"{total:g} 單位")
+        
+    st.divider()
+    
+    # 1. 依類別統計
+    st.markdown("##### 🏷️ 依類別統計數量")
+    cur.execute("""
+        SELECT category, SUM(quantity), COUNT(*) 
+        FROM foods 
+        WHERE fridge_id = ? AND quantity > 0 
+        GROUP BY category 
+        ORDER BY SUM(quantity) DESC
+    """, (current_fridge_id,))
+    cat_rows = cur.fetchall()
+    
+    if cat_rows:
+        for cat, q_sum, c_cnt in cat_rows:
+            cat_name = cat or '未分類'
+            st.markdown(f"- **{cat_name}**: 共 **{q_sum:g}** 單位（共 {c_cnt} 項品項）")
+    else:
+        st.info("目前尚無類別統計資料。")
+        
+    st.divider()
+    
+    # 2. 依位置統計
+    st.markdown("##### 📍 依存放位置統計數量")
+    cur.execute("""
+        SELECT location, SUM(quantity), COUNT(*) 
+        FROM foods 
+        WHERE fridge_id = ? AND quantity > 0 
+        GROUP BY location 
+        ORDER BY SUM(quantity) DESC
+    """, (current_fridge_id,))
+    loc_rows = cur.fetchall()
+    
+    if loc_rows:
+        for loc, q_sum, c_cnt in loc_rows:
+            loc_name = loc or '未指定'
+            st.markdown(f"- **{loc_name}**: 共 **{q_sum:g}** 單位（共 {c_cnt} 項品項）")
+    else:
+        st.info("目前尚無位置統計資料。")
+        
     con.close()
-    st.metric("總食材品項數", f"{count} 項")
-    st.metric("總庫存數量", f"{total:g} 單位")
