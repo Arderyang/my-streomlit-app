@@ -714,7 +714,8 @@ with tab6:
     st.divider()
     
     st.markdown("##### 🏷️ 依類別細分統計")
-    st.caption("燈號備註：常溫、冷凍30天內🔴紅燈、90天內🟠橘燈；冷藏3天內🟠橘燈、過期🔴紅燈")
+    st.caption("常溫、冷凍:90天內🟠橘燈、30天內🔴紅燈")
+    st.caption("冷藏:3天內🟠橘燈、過期🔴紅燈")
     cur.execute("""
         SELECT category, SUM(quantity), COUNT(*) 
         FROM foods 
