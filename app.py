@@ -387,47 +387,59 @@ with tab1:
 with tab2:
     st.subheader(f"📸 Google AI 智慧拍照辨識入庫 ({selected_fridge_name})")
     
-    for key, val in [("ai_name", "雞蛋"), ("ai_cat", "蛋類"), ("ai_qty", 1.0), ("ai_unit", "顆")]:
+    for key, val in [("ai_name", ""), ("ai_cat", "其他"), ("ai_qty", 1.0), ("ai_unit", "個")]:
         if key not in st.session_state:
             st.session_state[key] = val
 
-    camera_image = st.camera_input("拍攝冰箱內部或單一食材 (例如：1顆雞蛋)")
+    camera_image = st.camera_input("拍攝冰箱內部或單一食材")
     
     if camera_image is not None:
         image = Image.open(camera_image)
         st.image(image, caption="已拍攝的照片", use_container_width=True)
         
         if st.button("🤖 開始讓 Gemini 分析食材"):
-            with st.spinner("AI 正在分析影像中的食材與數量..."):
-                try:
-                    active_key = ""
+            import time
+            with st.spinner("AI 正在分析影像中的食材與數量，若遇伺服器忙碌將自動重試..."):
+                active_key = st.secrets.get("GEMINI_API_KEY", None)
+                client = genai.Client(api_key=active_key)
+                
+                prompt = (
+                    "請仔細分析這張照片中的主要食材及其數量。請嚴格依照下列格式回答，不要有其他廢話：\n"
+                    "名稱: [食材名稱]\n"
+                    "分類: [肉類/蔬菜/水果/乳製品/蛋類/海鮮/飲料/調味料/冷凍食品/其他]\n"
+                    "數量: [數字]\n"
+                    "單位: [單位]"
+                )
+                
+                success = False
+                ai_text = ""
+                # 自動重試機制（最多試 3 次，應對 503 忙碌）
+                for attempt in range(3):
                     try:
-                        if "GEMINI_API_KEY" in st.secrets:
-                            active_key = st.secrets["GEMINI_API_KEY"]
-                    except Exception:
-                        pass
-                    
-                    client = genai.Client(api_key=active_key if active_key else None)
-                    
-                    prompt = (
-                        "請仔細分析這張照片中的主要食材及其數量。請嚴格依照下列格式回答，不要有其他廢話：\n"
-                        "名稱: [食材名稱，例如 雞蛋]\n"
-                        "分類: [肉類/蔬菜/水果/乳製品/蛋類/海鮮/飲料/調味料/冷凍食品/其他]\n"
-                        "數量: [數字，例如 1]\n"
-                        "單位: [單位，例如 顆/個/盒]"
-                    )
-                    
-                    response = client.models.generate_content(
-                        model="gemini-3.8-flash", 
-                        contents=[image, prompt]
-                    )
-                    
-                    ai_text = response.text.strip()
+                        response = client.models.generate_content(
+                            model="gemini-3.8-flash", 
+                            contents=[image, prompt]
+                        )
+                        ai_text = response.text.strip()
+                        success = True
+                        break
+                    except Exception as e:
+                        if "503" in str(e) and attempt < 2:
+                            time.sleep(2) # 等待 2 秒後重試
+                            continue
+                        else:
+                            st.error(f"AI 辨識發生錯誤：{e}")
+                            break
+                
+                if success and ai_text:
                     st.success("🎉 AI 分析成功！")
-                    
+                    parsed_any = False
                     for line in ai_text.split("\n"):
                         if "名稱" in line:
-                            st.session_state.ai_name = line.split(":")[-1].split("：")[-1].strip().replace("]", "").replace("[", "")
+                            val = line.split(":")[-1].split("：")[-1].strip().replace("]", "").replace("[", "")
+                            if val:
+                                st.session_state.ai_name = val
+                                parsed_any = True
                         elif "分類" in line:
                             cat_val = line.split(":")[-1].split("：")[-1].strip().replace("]", "").replace("[", "")
                             if cat_val in CATEGORIES:
@@ -442,19 +454,18 @@ with tab2:
                             except Exception:
                                 pass
                         elif "單位" in line:
-                            st.session_state.ai_unit = line.split(":")[-1].split("：")[-1].strip().replace("]", "").replace("[", "")
-
-                except Exception as e:
-                    err_str = str(e)
-                    if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                        st.error("⚠️ AI 每日免費使用額度已達上限（Free Tier 限制），請明天再試，或至 Google AI Studio 設定付費方案以解鎖額度。")
+                            u_val = line.split(":")[-1].split("：")[-1].strip().replace("]", "").replace("[", "")
+                            if u_val:
+                                st.session_state.ai_unit = u_val
+                    
+                    if not parsed_any:
+                        st.warning(f"AI 回傳格式無法解析，原始回應為：\n{ai_text}")
                     else:
-                        st.error(f"AI 辨識發生錯誤：{e}")
+                        st.rerun()
 
-    # 移除 st.form，改用一般輸入元件與按鈕，確保成功訊息能順利顯示並避免重複入庫
     st.markdown("##### 📝 確認辨識與入庫資訊")
     f_name = st.text_input("食材名稱", value=st.session_state.ai_name, key="input_ai_name")
-    f_cat = st.selectbox("分類", CATEGORIES, index=CATEGORIES.index(st.session_state.ai_cat) if st.session_state.ai_cat in CATEGORIES else 4, key="input_ai_cat")
+    f_cat = st.selectbox("分類", CATEGORIES, index=CATEGORIES.index(st.session_state.ai_cat) if st.session_state.ai_cat in CATEGORIES else 9, key="input_ai_cat")
     f_qty = st.number_input("數量", min_value=0.1, value=float(st.session_state.ai_qty), step=1.0, key="input_ai_qty")
     f_unit = st.text_input("單位", value=st.session_state.ai_unit, key="input_ai_unit")
     f_loc = st.selectbox("存放位置", LOCATIONS, key="input_ai_loc")
@@ -477,9 +488,6 @@ with tab2:
             con.close()
             
             st.success(f"✅ 成功將 {f_qty:g} {f_unit} 的 {f_name.strip()} 加入冰箱！")
-            st.session_state.ai_name = "雞蛋"
-            st.session_state.ai_qty = 1.0
-
 # --- 標籤三：採買 ---
 with tab3:
     st.subheader(f"🛒 採買清單 ({selected_fridge_name})")
