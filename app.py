@@ -62,23 +62,76 @@ def init_db():
         )
     """)
     
+    # 使用者權限表
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            role TEXT NOT NULL
+        )
+    """)
+    
     # 若沒有預設冰箱，建立一個「主冰箱」
     cur.execute("SELECT COUNT(*) FROM fridges")
     if cur.fetchone()[0] == 0:
         cur.execute("INSERT INTO fridges (name) VALUES ('主冰箱')")
+        
+    # 若沒有管理員帳號，預設建立一個 admin (密碼: admin123)
+    cur.execute("SELECT COUNT(*) FROM users WHERE username = 'admin'")
+    if cur.fetchone()[0] == 0:
+        cur.execute("INSERT INTO users (username, password, role) VALUES ('admin', 'admin123', 'admin')")
         
     con.commit()
     con.close()
 
 init_db()
 
-# --- 2. 介面全域常數 ---
+# --- 2. 介面全域常數與登入控制 ---
 CATEGORIES = ["肉類", "蔬菜", "水果", "乳製品", "蛋類", "海鮮", "飲料", "調味料", "冷凍食品", "其他"]
 LOCATIONS = ["冷藏", "冷凍", "常溫"]
 
 st.set_page_config(page_title="智慧冰箱管理系統", page_icon="🧊", layout="centered")
 
 st.title("🧊 智慧冰箱管理系統")
+
+# Session State 初始化登入狀態
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+    st.session_state.username = ""
+    st.session_state.role = "user"
+
+# 側邊欄：登入與權限狀態
+st.sidebar.subheader("🔐 系統登入與權限")
+if not st.session_state.logged_in:
+    login_user = st.sidebar.text_input("帳號", key="login_user")
+    login_pass = st.sidebar.text_input("密碼", type="password", key="login_pass")
+    if st.sidebar.button("登入", type="primary"):
+        con = get_db()
+        cur = con.cursor()
+        cur.execute("SELECT * FROM users WHERE username = ? AND password = ?", (login_user.strip(), login_pass.strip()))
+        user_row = cur.fetchone()
+        con.close()
+        
+        if user_row:
+            st.session_state.logged_in = True
+            st.session_state.username = user_row["username"]
+            st.session_state.role = user_row["role"]
+            st.success("登入成功！")
+            st.rerun()
+        else:
+            st.sidebar.error("帳號或密碼錯誤！")
+    
+    st.info("提示：預設管理員帳號為 `admin`，密碼為 `admin123`")
+    st.stop() # 未登入前不顯示後續主要應用
+else:
+    st.sidebar.write(f"👤 當前使用者：**{st.session_state.username}**")
+    st.sidebar.write(f"🛡️ 身份權限：**{'管理員 (Admin)' if st.session_state.role == 'admin' else '一般使用者 (User)'}**")
+    if st.sidebar.button("登出系統"):
+        st.session_state.logged_in = False
+        st.session_state.username = ""
+        st.session_state.role = "user"
+        st.rerun()
 
 # 選擇冰箱
 con = get_db()
@@ -91,14 +144,16 @@ fridge_dict = {f["name"]: f["id"] for f in fridges}
 selected_fridge_name = st.sidebar.selectbox("選擇目前冰箱", list(fridge_dict.keys()))
 current_fridge_id = fridge_dict[selected_fridge_name]
 
-# --- 3. 標籤頁導覽 ---
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📦 庫存", "📸 拍照AI", "🍳 食譜", "🛒 採買", "📋 取出紀錄", "📊 報表"])
+# --- 3. 標籤頁導覽（依權限動態調整） ---
+if st.session_state.role == "admin":
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📦 庫存", "📸 拍照AI", "🍳 食譜", "🛒 採買", "📋 取出紀錄", "📊 報表", "👥 用戶權限管理"])
+else:
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📦 庫存", "📸 拍照AI", "🍳 食譜", "🛒 採買", "📋 取出紀錄", "📊 報表"])
 
 # --- 標籤一：庫存管理（含手動新增與清單） ---
 with tab1:
     st.subheader(f"📦 食材庫存管理 ({selected_fridge_name})")
     
-    # 手動新增食材區塊
     with st.expander("➕ 手動新增食材"):
         with st.form("manual_add_food_form"):
             m_name = st.text_input("食材名稱")
@@ -221,7 +276,7 @@ with tab2:
                 for attempt in range(3):
                     try:
                         response = client.models.generate_content(
-                            model="gemini-3.8-flash", 
+                            model="gemini-2.5-flash", 
                             contents=[image, prompt]
                         )
                         ai_text = response.text.strip()
@@ -444,7 +499,6 @@ with tab6:
     con = get_db()
     cur = con.cursor()
     
-    # 總計數據
     cur.execute("SELECT COUNT(*), COALESCE(SUM(quantity),0) FROM foods WHERE fridge_id = ? AND quantity > 0", (current_fridge_id,))
     count, total = cur.fetchone()
     
@@ -456,7 +510,6 @@ with tab6:
         
     st.divider()
     
-    # 1. 依類別統計
     st.markdown("##### 🏷️ 依類別統計數量")
     cur.execute("""
         SELECT category, SUM(quantity), COUNT(*) 
@@ -476,7 +529,6 @@ with tab6:
         
     st.divider()
     
-    # 2. 依位置統計
     st.markdown("##### 📍 依存放位置統計數量")
     cur.execute("""
         SELECT location, SUM(quantity), COUNT(*) 
@@ -495,3 +547,62 @@ with tab6:
         st.info("目前尚無位置統計資料。")
         
     con.close()
+
+# --- 標籤七：管理員專屬 - 用戶權限管理 ---
+if st.session_state.role == "admin":
+    with tab7:
+        st.subheader("👥 系統用戶與權限管理")
+        
+        with st.expander("➕ 新增系統用戶"):
+            with st.form("add_user_form"):
+                new_u_name = st.text_input("新帳號名稱")
+                new_u_pass = st.text_input("密碼", type="password")
+                new_u_role = st.selectbox("指派權限", ["user", "admin"])
+                u_submitted = st.form_submit_button("建立用戶", type="primary")
+                
+                if u_submitted:
+                    if not new_u_name.strip() or not new_u_pass.strip():
+                        st.warning("帳號與密碼不得為空！")
+                    else:
+                        try:
+                            con = get_db()
+                            cur = con.cursor()
+                            cur.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
+                                        (new_u_name.strip(), new_u_pass.strip(), new_u_role))
+                            con.commit()
+                            con.close()
+                            st.success(f"✅ 成功建立用戶：{new_u_name.strip()}（權限：{new_u_role}）")
+                            st.rerun()
+                        except sqlite3.IntegrityError:
+                            st.error("此帳號名稱已存在，請使用其他名稱。")
+
+        st.divider()
+        st.markdown("##### 📋 現有用戶清單")
+        con = get_db()
+        cur = con.cursor()
+        cur.execute("SELECT id, username, role FROM users")
+        all_users = cur.fetchall()
+        con.close()
+        
+        if all_users:
+            for u_id, u_name, u_role in all_users:
+                col_u1, col_u2, col_u3 = st.columns([2, 2, 1])
+                with col_u1:
+                    st.write(f"**帳號：** {u_name}")
+                with col_u2:
+                    st.write(f"**權限：** {u_role}")
+                with col_u3:
+                    # 不允許刪除預設的 admin 帳號避免無法登入管理員
+                    if u_name != "admin":
+                        if st.button("🗑️ 刪除", key=f"del_user_{u_id}"):
+                            con = get_db()
+                            cur = con.cursor()
+                            cur.execute("DELETE FROM users WHERE id = ?", (u_id,))
+                            con.commit()
+                            con.close()
+                            st.success(f"已刪除用戶 {u_name}")
+                            st.rerun()
+                    else:
+                        st.write("系統核心")
+        else:
+            st.info("目前無其他用戶。")
