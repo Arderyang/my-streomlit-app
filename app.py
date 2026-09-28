@@ -245,7 +245,7 @@ with tab1:
     
     if foods:
         st.markdown("##### 現有庫存清單 (依效期排序)")
-        st.caption("常溫、冷凍:30天內🔴紅燈、90天內🟠橘燈")
+        st.caption("常溫、冷凍:90天內🟠橘燈、30天內🔴紅燈")
         st.caption("冷藏:3天內🟠橘燈、過期🔴紅燈")
         for f in foods:
             expiry_date = date.fromisoformat(f["expiry_date"])
